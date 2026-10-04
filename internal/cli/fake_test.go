@@ -175,14 +175,21 @@ func (f *fakeGitHub) Get(_ context.Context, _, _ string, n int) (*github.PullReq
 }
 
 func (f *fakeGitHub) List(_ context.Context, owner, _ string, o *github.PullRequestListOptions) ([]*github.PullRequest, *github.Response, error) {
-	if err := f.record("List", o.Head); err != nil {
+	if err := f.record("List", o.Head, o.Base); err != nil {
 		return nil, nil, err
 	}
-	var out []*github.PullRequest
-	for _, pr := range f.prs {
-		if o.Head == owner+":"+pr.GetHead().GetRef() && pr.GetState() == "open" {
-			out = append(out, pr)
+	var nums []int
+	for n, pr := range f.prs {
+		headOK := o.Head == "" || o.Head == owner+":"+pr.GetHead().GetRef()
+		baseOK := o.Base == "" || o.Base == pr.GetBase().GetRef()
+		if headOK && baseOK && pr.GetState() == "open" {
+			nums = append(nums, n)
 		}
+	}
+	sort.Ints(nums)
+	var out []*github.PullRequest
+	for _, n := range nums {
+		out = append(out, f.prs[n])
 	}
 	return out, nil, nil
 }
