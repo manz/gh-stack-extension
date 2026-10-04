@@ -2,47 +2,34 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"net/http"
+	"strings"
 	"testing"
 )
 
-type fakeClient struct {
-	body string
-	err  error
-}
-
-func (f fakeClient) Get(_ string, response interface{}) error {
-	if f.err != nil {
-		return f.err
-	}
-	return json.Unmarshal([]byte(f.body), response)
-}
-
-func clientOf(c restClient, err error) func() (restClient, error) {
-	return func() (restClient, error) { return c, err }
-}
-
-func TestRunPrintsTheLogin(t *testing.T) {
+func TestRunReportsAnHTTPClientError(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := run(&out, &errOut, clientOf(fakeClient{body: `{"login":"manz"}`}, nil))
-	if code != 0 || out.String() != "running as manz\n" {
-		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errOut.String())
-	}
-}
-
-func TestRunReportsAClientError(t *testing.T) {
-	var out, errOut bytes.Buffer
-	code := run(&out, &errOut, clientOf(nil, errors.New("no token")))
+	code := run([]string{"list"}, &out, &errOut, func() (*http.Client, error) { return nil, errors.New("no token") })
 	if code != 1 || errOut.String() != "no token\n" {
 		t.Fatalf("code=%d err=%q", code, errOut.String())
 	}
 }
 
-func TestRunReportsAnAPIError(t *testing.T) {
+func TestRunDispatchesToTheCLI(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := run(&out, &errOut, clientOf(fakeClient{err: errors.New("HTTP 401")}, nil))
-	if code != 1 || errOut.String() != "HTTP 401\n" {
-		t.Fatalf("code=%d err=%q", code, errOut.String())
+	code := run([]string{"help"}, &out, &errOut, func() (*http.Client, error) { return &http.Client{}, nil })
+	if code != 0 || !strings.Contains(out.String(), "usage:") {
+		t.Fatalf("code=%d out=%q", code, out.String())
+	}
+}
+
+func TestResolveRepoParsesTheOverride(t *testing.T) {
+	owner, name, err := resolveRepo("manz/ff4")
+	if err != nil || owner != "manz" || name != "ff4" {
+		t.Fatalf("%s/%s err=%v", owner, name, err)
+	}
+	if _, _, err := resolveRepo("not a repo"); err == nil {
+		t.Fatal("expected a parse error")
 	}
 }
