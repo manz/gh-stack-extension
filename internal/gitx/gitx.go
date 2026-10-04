@@ -25,3 +25,39 @@ func (r Repo) git(args ...string) (string, error) {
 func (r Repo) CurrentBranch() (string, error) {
 	return r.git("symbolic-ref", "--short", "HEAD")
 }
+
+// BranchSHA returns a local branch's commit, or "" if the branch is missing.
+func (r Repo) BranchSHA(branch string) (string, error) {
+	out, err := r.git("for-each-ref", "--format=%(objectname)", "refs/heads/"+branch)
+	return out, err
+}
+
+// RefSHA returns any ref's commit, or "" if it does not exist.
+func (r Repo) RefSHA(ref string) (string, error) {
+	out, err := r.git("for-each-ref", "--format=%(objectname)", ref)
+	return out, err
+}
+
+// HasCommit reports whether the commit is in the local object store.
+func (r Repo) HasCommit(sha string) bool {
+	_, err := r.git("cat-file", "-e", sha+"^{commit}")
+	return err == nil
+}
+
+// IsAncestor reports whether a is an ancestor of (or equal to) b.
+func (r Repo) IsAncestor(a, b string) bool {
+	_, err := r.git("merge-base", "--is-ancestor", a, b)
+	return err == nil
+}
+
+// RestackOnto rebases top onto upstream, moving every branch on the way.
+func (r Repo) RestackOnto(upstream, top string) error {
+	_, err := r.git("rebase", "--update-refs", upstream, top)
+	return err
+}
+
+// Push pushes branches to remote, refusing to overwrite unseen remote work.
+func (r Repo) Push(remote string, branches []string) error {
+	_, err := r.git(append([]string{"push", "--force-with-lease", remote}, branches...)...)
+	return err
+}

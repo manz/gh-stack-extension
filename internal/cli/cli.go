@@ -29,6 +29,12 @@ const (
 // Git is the local repository the commands read and change.
 type Git interface {
 	CurrentBranch() (string, error)
+	BranchSHA(branch string) (string, error)
+	RefSHA(ref string) (string, error)
+	HasCommit(sha string) bool
+	IsAncestor(a, b string) bool
+	RestackOnto(upstream, top string) error
+	Push(remote string, branches []string) error
 }
 
 // Deps are the outside world: output streams, GitHub, git and the repository.

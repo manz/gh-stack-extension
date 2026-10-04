@@ -194,12 +194,54 @@ func (f *fakeGitHub) List(_ context.Context, owner, _ string, o *github.PullRequ
 	return out, nil, nil
 }
 
+// fakeGit is a commit graph (each commit knows its parent) plus refs.
 type fakeGit struct {
-	branch string
-	err    error
+	branch   string
+	err      error
+	parents  map[string]string // sha -> parent sha
+	refs     map[string]string // "refs/heads/x", "refs/remotes/origin/x" -> sha
+	restacks []string
+	pushes   []string
+	failOp   map[string]error
 }
 
 func (g *fakeGit) CurrentBranch() (string, error) { return g.branch, g.err }
+
+func (g *fakeGit) BranchSHA(b string) (string, error) {
+	return g.refs["refs/heads/"+b], g.failOp["BranchSHA"]
+}
+
+func (g *fakeGit) RefSHA(ref string) (string, error) { return g.refs[ref], g.failOp["RefSHA"] }
+
+func (g *fakeGit) HasCommit(sha string) bool {
+	_, ok := g.parents[sha]
+	return ok
+}
+
+func (g *fakeGit) IsAncestor(a, b string) bool {
+	for cur, ok := b, true; ok; cur, ok = g.parents[cur] {
+		if cur == a {
+			return true
+		}
+		if cur == "" {
+			return false
+		}
+	}
+	return false
+}
+
+// commit adds sha on top of parent ("" for a root).
+func (g *fakeGit) commit(sha, parent string) { g.parents[sha] = parent }
+
+func (g *fakeGit) RestackOnto(upstream, top string) error {
+	g.restacks = append(g.restacks, upstream+" "+top)
+	return g.failOp["RestackOnto"]
+}
+
+func (g *fakeGit) Push(remote string, branches []string) error {
+	g.pushes = append(g.pushes, remote+" "+strings.Join(branches, " "))
+	return g.failOp["Push"]
+}
 
 // harness runs commands against a fake GitHub and git.
 type harness struct {
@@ -208,7 +250,9 @@ type harness struct {
 	out, err bytes.Buffer
 }
 
-func newHarness() *harness { return &harness{gh: newFake(), git: &fakeGit{branch: "main"}} }
+func newHarness() *harness {
+	return &harness{gh: newFake(), git: &fakeGit{branch: "main", parents: map[string]string{}, refs: map[string]string{}, failOp: map[string]error{}}}
+}
 
 func (h *harness) run(args ...string) int {
 	h.out.Reset()
