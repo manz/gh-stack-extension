@@ -190,6 +190,9 @@ func joinNumbers(prs []int) string {
 	parts := make([]string, len(prs))
 	for i, n := range prs {
 		parts[i] = fmt.Sprintf("#%d", n)
+		if n == 0 { // a pull request a dry run would create
+			parts[i] = "new"
+		}
 	}
 	return strings.Join(parts, " → ")
 }

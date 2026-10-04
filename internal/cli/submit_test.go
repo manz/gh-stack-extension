@@ -86,7 +86,7 @@ func TestSubmitDryRunChangesNothing(t *testing.T) {
 	if code := h.run("submit", "--dry-run", "b1", "b2", "b3"); code != ExitOK {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
-	want := "would-push to origin: b1 b2 b3\n  unchanged #1 (b1 → main)\n  would-retargeted #2 (b2 → b1)\n  would-created new (b3 → b2)\nwould-link stack: #1 → #2 → #0\n"
+	want := "would-push to origin: b1 b2 b3\n  unchanged #1 (b1 → main)\n  would-retargeted #2 (b2 → b1)\n  would-created new (b3 → b2)\nwould-link stack: #1 → #2 → new\n"
 	if h.out.String() != want || len(h.git.pushes) != 0 {
 		t.Fatalf("out=%q pushes=%v", h.out.String(), h.git.pushes)
 	}
