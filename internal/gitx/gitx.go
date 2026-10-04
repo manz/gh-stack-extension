@@ -61,3 +61,21 @@ func (r Repo) Push(remote string, branches []string) error {
 	_, err := r.git(append([]string{"push", "--force-with-lease", remote}, branches...)...)
 	return err
 }
+
+// FirstCommitMessage returns the subject and body of the oldest commit on
+// branch that upstream lacks.
+func (r Repo) FirstCommitMessage(upstream, branch string) (string, string, error) {
+	shas, err := r.git("rev-list", "--reverse", upstream+".."+branch)
+	if err != nil {
+		return "", "", err
+	}
+	if shas == "" {
+		return "", "", fmt.Errorf("%s has no commits on top of %s", branch, upstream)
+	}
+	msg, err := r.git("log", "-1", "--format=%B", strings.SplitN(shas, "\n", 2)[0])
+	if err != nil {
+		return "", "", err
+	}
+	subject, body, _ := strings.Cut(msg, "\n")
+	return subject, strings.TrimSpace(body), nil
+}

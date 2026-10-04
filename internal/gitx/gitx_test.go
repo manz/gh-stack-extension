@@ -92,3 +92,20 @@ func TestRefsAncestryRestackAndPush(t *testing.T) {
 		t.Fatal("push to a missing remote must fail")
 	}
 }
+
+func TestFirstCommitMessage(t *testing.T) {
+	r := newRepo(t)
+	r.must(t, "checkout", "-q", "-b", "feat")
+	r.must(t, "commit", "-q", "--allow-empty", "-m", "Add the thing\n\nWhy it matters.")
+	r.must(t, "commit", "-q", "--allow-empty", "-m", "Follow-up")
+	subject, body, err := r.FirstCommitMessage("main", "feat")
+	if err != nil || subject != "Add the thing" || body != "Why it matters." {
+		t.Fatalf("%q %q %v", subject, body, err)
+	}
+	if _, _, err := r.FirstCommitMessage("feat", "main"); err == nil || !strings.Contains(err.Error(), "no commits") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, _, err := r.FirstCommitMessage("main", "nope"); err == nil {
+		t.Fatal("expected an error for a missing branch")
+	}
+}

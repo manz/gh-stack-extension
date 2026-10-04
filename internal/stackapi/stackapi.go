@@ -44,6 +44,8 @@ type Service interface {
 	Unstack(ctx context.Context, owner, repo string, number int) (*github.PullRequestStackDetails, *github.Response, error)
 	Get(ctx context.Context, owner, repo string, number int) (*github.PullRequest, *github.Response, error)
 	List(ctx context.Context, owner, repo string, opts *github.PullRequestListOptions) ([]*github.PullRequest, *github.Response, error)
+	Create(ctx context.Context, owner, repo string, body github.CreatePullRequest) (*github.PullRequest, *github.Response, error)
+	Edit(ctx context.Context, owner, repo string, number int, pull *github.PullRequest) (*github.PullRequest, *github.Response, error)
 }
 
 // Sentinel errors the CLI maps to exit codes; wrapped with GitHub's message.

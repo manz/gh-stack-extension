@@ -22,6 +22,7 @@ func synced() *harness {
 	h.git.refs["refs/remotes/origin/main"] = "m0"
 	for _, b := range []string{"b1", "b2", "b3"} {
 		h.git.refs["refs/heads/"+b] = "sha-" + b
+		h.git.refs["refs/remotes/origin/"+b] = "sha-" + b
 	}
 	h.git.branch = "b2"
 	return h

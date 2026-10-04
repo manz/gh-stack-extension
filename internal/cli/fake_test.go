@@ -279,3 +279,36 @@ func (h *harness) chain(n int) {
 func apiErrorClassified(status int) error {
 	return classifyForTest(apiError(status, "x"))
 }
+
+func (f *fakeGitHub) Create(_ context.Context, _, _ string, b github.CreatePullRequest) (*github.PullRequest, *github.Response, error) {
+	if err := f.record("Create", b.Head, b.Base, b.GetTitle(), b.GetDraft()); err != nil {
+		return nil, nil, err
+	}
+	f.nextPR++
+	pr := f.addPR(f.nextPR, b.Head, b.Base)
+	pr.Title, pr.Body, pr.Draft = b.Title, b.Body, b.Draft
+	return pr, nil, nil
+}
+
+func (f *fakeGitHub) Edit(_ context.Context, _, _ string, n int, p *github.PullRequest) (*github.PullRequest, *github.Response, error) {
+	if err := f.record("Edit", n, p.GetBase().GetRef()); err != nil {
+		return nil, nil, err
+	}
+	f.prs[n].Base = &github.PullRequestBranch{Ref: github.Ptr(p.GetBase().GetRef())}
+	return f.prs[n], nil, nil
+}
+
+func (g *fakeGit) FirstCommitMessage(upstream, branch string) (string, string, error) {
+	if err := g.failOp["FirstCommitMessage"]; err != nil {
+		return "", "", err
+	}
+	return "Subject of " + branch, "Body of " + branch + " on " + upstream, nil
+}
+
+// local creates branches with fresh commits that the remote has not seen.
+func (h *harness) local(branches ...string) {
+	for _, b := range branches {
+		h.git.commit("local-"+b, "")
+		h.git.refs["refs/heads/"+b] = "local-" + b
+	}
+}

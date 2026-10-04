@@ -91,7 +91,7 @@ func (e *env) link(prs []int, dryRun bool) (linkResult, error) {
 		return res, err
 	}
 	if existing != nil {
-		have := detailNumbers(existing)
+		have := openNumbers(existing)
 		if !isPrefix(have, prs) {
 			return res, fmt.Errorf("%w: #%d is in stack %d (%s), not the bottom of %s", stackapi.ErrValidation, prs[0], existing.Number, joinNumbers(have), joinNumbers(prs))
 		}
@@ -129,6 +129,18 @@ func (e *env) stackHolding(pr int) (*github.PullRequestStackDetails, error) {
 	}
 	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *p.Stack.Number)
 	return s, stackapi.Classify(err)
+}
+
+// openNumbers is the stack's layers still open: merged ones stay in the
+// stack's history but are no longer part of what gets linked or grown.
+func openNumbers(s *github.PullRequestStackDetails) []int {
+	out := []int{}
+	for _, p := range s.PullRequests {
+		if p.MergedAt == nil && p.State == "open" {
+			out = append(out, p.Number)
+		}
+	}
+	return out
 }
 
 func isPrefix(prefix, of []int) bool {
@@ -183,11 +195,8 @@ func runAdd(e *env, args []string, dryRun bool) error {
 	if err != nil {
 		return stackapi.Classify(err)
 	}
-	have := detailNumbers(s)
-	if len(have) > 0 {
-		return e.linkAndReport(append(have, withoutTop(have, prs)...), dryRun)
-	}
-	return e.linkAndReport(prs, dryRun)
+	have := openNumbers(s)
+	return e.linkAndReport(append(have, withoutTop(have, prs)...), dryRun)
 }
 
 // withoutTop drops the leading prs that already sit at the top of have, so

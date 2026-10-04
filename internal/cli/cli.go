@@ -35,6 +35,7 @@ type Git interface {
 	IsAncestor(a, b string) bool
 	RestackOnto(upstream, top string) error
 	Push(remote string, branches []string) error
+	FirstCommitMessage(upstream, branch string) (subject, body string, err error)
 }
 
 // Deps are the outside world: output streams, GitHub, git and the repository.
