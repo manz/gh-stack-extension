@@ -11,6 +11,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/manz/gh-stack-extension/internal/stackapi"
 )
@@ -45,6 +46,8 @@ type Deps struct {
 	Git      Git
 	// Repo resolves owner and name, honouring --repo when set.
 	Repo func(override string) (owner, name string, err error)
+	// Sleep waits between merge polls; nil means time.Sleep.
+	Sleep func(time.Duration)
 }
 
 // env is what a command runs with once flags are parsed.

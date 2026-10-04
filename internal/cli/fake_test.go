@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 )
@@ -21,6 +22,8 @@ type fakeGitHub struct {
 	calls     []string
 	fail      map[string]error // by call name
 	pageSize  int              // ListStacks page size; 0 = all at once
+	merges    []string         // statuses MergeAsync then each poll return
+	mergeMsg  string
 }
 
 func newFake() *fakeGitHub {
@@ -32,7 +35,7 @@ func apiError(status int, msg string) error {
 }
 
 func (f *fakeGitHub) record(name string, args ...interface{}) error {
-	f.calls = append(f.calls, strings.TrimSpace(name+" "+fmt.Sprint(args...)))
+	f.calls = append(f.calls, strings.TrimSuffix(name+" "+fmt.Sprintln(args...), "\n"))
 	return f.fail[name]
 }
 
@@ -248,7 +251,10 @@ type harness struct {
 	gh       *fakeGitHub
 	git      *fakeGit
 	out, err bytes.Buffer
+	slept    []time.Duration
 }
+
+func (h *harness) sleep(d time.Duration) { h.slept = append(h.slept, d) }
 
 func newHarness() *harness {
 	return &harness{gh: newFake(), git: &fakeGit{branch: "main", parents: map[string]string{}, refs: map[string]string{}, failOp: map[string]error{}}}
@@ -257,7 +263,7 @@ func newHarness() *harness {
 func (h *harness) run(args ...string) int {
 	h.out.Reset()
 	h.err.Reset()
-	return Run(context.Background(), args, Deps{Out: &h.out, Err: &h.err, PRs: h.gh, Git: h.git,
+	return Run(context.Background(), args, Deps{Out: &h.out, Err: &h.err, PRs: h.gh, Git: h.git, Sleep: h.sleep,
 		Repo: func(override string) (string, string, error) {
 			if override == "bad" {
 				return "", "", errors.New("bad repo")
@@ -311,4 +317,27 @@ func (h *harness) local(branches ...string) {
 		h.git.commit("local-"+b, "")
 		h.git.refs["refs/heads/"+b] = "local-" + b
 	}
+}
+
+func (f *fakeGitHub) mergeResult() *github.PullRequestMergeAsyncResult {
+	status := "pending"
+	if len(f.merges) > 0 {
+		status, f.merges = f.merges[0], f.merges[1:]
+	}
+	return &github.PullRequestMergeAsyncResult{Status: github.Ptr(status),
+		Details: &github.PullRequestMergeAsyncDetails{UUID: github.Ptr("u-1"), Message: github.Ptr(f.mergeMsg)}}
+}
+
+func (f *fakeGitHub) MergeAsync(_ context.Context, _, _ string, n int, b github.PullRequestMergeAsyncRequest) (*github.PullRequestMergeAsyncResult, *github.Response, error) {
+	if err := f.record("MergeAsync", n, b.GetMergeMethod(), b.GetMergeAction()); err != nil {
+		return nil, nil, err
+	}
+	return f.mergeResult(), nil, nil
+}
+
+func (f *fakeGitHub) GetMergeAsyncResult(_ context.Context, _, _ string, n int, uuid string) (*github.PullRequestMergeAsyncResult, *github.Response, error) {
+	if err := f.record("GetMergeAsyncResult", n, uuid); err != nil {
+		return nil, nil, err
+	}
+	return f.mergeResult(), nil, nil
 }

@@ -46,6 +46,8 @@ type Service interface {
 	List(ctx context.Context, owner, repo string, opts *github.PullRequestListOptions) ([]*github.PullRequest, *github.Response, error)
 	Create(ctx context.Context, owner, repo string, body github.CreatePullRequest) (*github.PullRequest, *github.Response, error)
 	Edit(ctx context.Context, owner, repo string, number int, pull *github.PullRequest) (*github.PullRequest, *github.Response, error)
+	MergeAsync(ctx context.Context, owner, repo string, number int, body github.PullRequestMergeAsyncRequest) (*github.PullRequestMergeAsyncResult, *github.Response, error)
+	GetMergeAsyncResult(ctx context.Context, owner, repo string, number int, uuid string) (*github.PullRequestMergeAsyncResult, *github.Response, error)
 }
 
 // Sentinel errors the CLI maps to exit codes; wrapped with GitHub's message.
