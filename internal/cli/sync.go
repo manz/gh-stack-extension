@@ -159,25 +159,9 @@ type restackResult struct {
 // parent tip is GitHub's head of the layer below (what it was built on), or
 // the merge-base for the bottom layer. Fixing a middle layer so carries up.
 func runRestack(e *env, args []string, o stackOpts) error {
-	s, err := e.loadStack(args, o)
+	open, err := e.openLayers(args, o)
 	if err != nil {
 		return err
-	}
-	ls, err := e.layers(s, o.remote)
-	if err != nil {
-		return err
-	}
-	var open []layer
-	for _, l := range ls {
-		if !l.MergedOrClosed {
-			if l.Sync == syncMissing {
-				return fmt.Errorf("%w: branch %s (#%d) is not checked out locally", stackapi.ErrNotFound, l.Branch, l.Number)
-			}
-			open = append(open, l)
-		}
-	}
-	if len(open) == 0 {
-		return fmt.Errorf("%w: stack %d has no open pull requests", stackapi.ErrValidation, s.Number)
 	}
 	current, err := e.Git.CurrentBranch()
 	if err != nil {
@@ -186,31 +170,13 @@ func runRestack(e *env, args []string, o stackOpts) error {
 	res := restackResult{Action: actionUnchanged, Restacked: []string{}, Branches: map[string]string{}}
 	moving := false // under --dry-run, everything above a moved layer moves too
 	for i, l := range open {
-		parent, parentSHA, oldBase, err := e.parentOf(open, i)
+		moved, err := e.restackLayer(open, i, moving, o.dryRun)
 		if err != nil {
 			return err
 		}
-		local, err := e.Git.BranchSHA(l.Branch)
-		if err != nil {
-			return err
-		}
-		if !moving && (parentSHA == "" || e.Git.IsAncestor(parentSHA, local)) {
-			res.Branches[l.Branch] = local
-			continue
-		}
-		res.Restacked = append(res.Restacked, l.Branch)
-		if o.dryRun {
-			moving = true
-			res.Branches[l.Branch] = local
-			continue
-		}
-		if oldBase == "" || !e.Git.HasCommit(oldBase) || !e.Git.IsAncestor(oldBase, local) {
-			if oldBase, err = e.Git.MergeBase(parentSHA, local); err != nil {
-				return err
-			}
-		}
-		if err := e.Git.RebaseOnto(parent, oldBase, l.Branch); err != nil {
-			return err
+		if moved {
+			res.Restacked = append(res.Restacked, l.Branch)
+			moving = o.dryRun
 		}
 		if res.Branches[l.Branch], err = e.Git.BranchSHA(l.Branch); err != nil {
 			return err
@@ -224,25 +190,78 @@ func runRestack(e *env, args []string, o stackOpts) error {
 			}
 		}
 	}
-	return e.emit(res, func(w io.Writer) {
-		if len(res.Restacked) == 0 {
-			fmt.Fprintln(w, "unchanged: every layer sits on its parent")
-			return
+	return e.emit(res, func(w io.Writer) { printRestack(w, res) })
+}
+
+// openLayers is the stack's open layers, all checked out locally.
+func (e *env) openLayers(args []string, o stackOpts) ([]layer, error) {
+	s, err := e.loadStack(args, o)
+	if err != nil {
+		return nil, err
+	}
+	ls, err := e.layers(s, o.remote)
+	if err != nil {
+		return nil, err
+	}
+	var open []layer
+	for _, l := range ls {
+		if l.MergedOrClosed {
+			continue
 		}
-		fmt.Fprintf(w, "%s: %s\n", res.Action, strings.Join(res.Restacked, " "))
-	})
+		if l.Sync == syncMissing {
+			return nil, fmt.Errorf("%w: branch %s (#%d) is not checked out locally", stackapi.ErrNotFound, l.Branch, l.Number)
+		}
+		open = append(open, l)
+	}
+	if len(open) == 0 {
+		return nil, fmt.Errorf("%w: stack %d has no open pull requests", stackapi.ErrValidation, s.Number)
+	}
+	return open, nil
+}
+
+// restackLayer replays layer i onto its parent when the parent's tip is not
+// in its history (or, under --dry-run, when a layer below would move).
+func (e *env) restackLayer(open []layer, i int, moving, dryRun bool) (bool, error) {
+	parent, parentSHA, oldBase, err := e.parentOf(open, i)
+	if err != nil {
+		return false, err
+	}
+	local, err := e.Git.BranchSHA(open[i].Branch)
+	if err != nil {
+		return false, err
+	}
+	if !moving && (parentSHA == "" || e.Git.IsAncestor(parentSHA, local)) {
+		return false, nil
+	}
+	if dryRun {
+		return true, nil
+	}
+	if oldBase == "" || !e.Git.HasCommit(oldBase) || !e.Git.IsAncestor(oldBase, local) {
+		if oldBase, err = e.Git.MergeBase(parentSHA, local); err != nil {
+			return false, err
+		}
+	}
+	return true, e.Git.RebaseOnto(parent, oldBase, open[i].Branch)
+}
+
+func printRestack(w io.Writer, res restackResult) {
+	if len(res.Restacked) == 0 {
+		fmt.Fprintln(w, "unchanged: every layer sits on its parent")
+		return
+	}
+	fmt.Fprintf(w, "%s: %s\n", res.Action, strings.Join(res.Restacked, " "))
 }
 
 // parentOf is what layer i sits on: the branch or ref name, its local tip,
 // and the tip GitHub knows for it (empty for the base).
-func (e *env) parentOf(open []layer, i int) (string, string, string, error) {
+func (e *env) parentOf(open []layer, i int) (parent, localTip, githubTip string, err error) {
 	if i == 0 {
-		sha, err := e.Git.RefSHA("refs/remotes/" + open[0].Parent)
-		return open[0].Parent, sha, "", err
+		localTip, err = e.Git.RefSHA("refs/remotes/" + open[0].Parent)
+		return open[0].Parent, localTip, "", err
 	}
 	below := open[i-1]
-	sha, err := e.Git.BranchSHA(below.Branch)
-	return below.Branch, sha, below.RemoteSHA, err
+	localTip, err = e.Git.BranchSHA(below.Branch)
+	return below.Branch, localTip, below.RemoteSHA, err
 }
 
 type pushResult struct {
@@ -260,23 +279,15 @@ func runPush(e *env, args []string, o stackOpts) error {
 	if err != nil {
 		return err
 	}
-	res := pushResult{Action: "unchanged", Remote: o.remote, Branches: []string{}}
-	for _, l := range ls {
-		if l.MergedOrClosed || l.Sync == syncInSync {
-			continue
-		}
-		if l.Sync == syncMissing {
-			return fmt.Errorf("%w: branch %s (#%d) is not checked out locally", stackapi.ErrNotFound, l.Branch, l.Number)
-		}
-		if l.Sync == syncBehind {
-			return fmt.Errorf("%w: branch %s (#%d) is behind GitHub; pull it before pushing", stackapi.ErrConflict, l.Branch, l.Number)
-		}
-		res.Branches = append(res.Branches, l.Branch)
+	branches, err := pushable(ls)
+	if err != nil {
+		return err
 	}
-	if len(res.Branches) > 0 {
+	res := pushResult{Action: actionUnchanged, Remote: o.remote, Branches: branches}
+	if len(branches) > 0 {
 		res.Action = dry("pushed", o.dryRun)
 		if !o.dryRun {
-			if err := e.Git.Push(o.remote, res.Branches); err != nil {
+			if err := e.Git.Push(o.remote, branches); err != nil {
 				return err
 			}
 		}
@@ -288,4 +299,22 @@ func runPush(e *env, args []string, o stackOpts) error {
 		}
 		fmt.Fprintf(w, "%s to %s: %s\n", res.Action, res.Remote, strings.Join(res.Branches, " "))
 	})
+}
+
+// pushable is the open layers' branches that differ from GitHub; a missing
+// or behind branch stops the push.
+func pushable(ls []layer) ([]string, error) {
+	out := []string{}
+	for _, l := range ls {
+		switch {
+		case l.MergedOrClosed || l.Sync == syncInSync:
+		case l.Sync == syncMissing:
+			return nil, fmt.Errorf("%w: branch %s (#%d) is not checked out locally", stackapi.ErrNotFound, l.Branch, l.Number)
+		case l.Sync == syncBehind:
+			return nil, fmt.Errorf("%w: branch %s (#%d) is behind GitHub; pull it before pushing", stackapi.ErrConflict, l.Branch, l.Number)
+		default:
+			out = append(out, l.Branch)
+		}
+	}
+	return out, nil
 }

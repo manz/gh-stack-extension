@@ -58,17 +58,9 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 	if err != nil {
 		return err
 	}
-	pr, err := e.mergeTarget(args)
+	res, err := e.mergePlan(args)
 	if err != nil {
 		return err
-	}
-	res := mergeResult{PullRequest: pr.GetNumber(), PullRequests: []int{pr.GetNumber()}}
-	if pr.Stack != nil && pr.Stack.Number != nil {
-		s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *pr.Stack.Number)
-		if err != nil {
-			return stackapi.Classify(err)
-		}
-		res.PullRequests = upTo(openNumbers(s), pr.GetNumber())
 	}
 	if o.dryRun {
 		res.Status = "would-merge"
@@ -79,7 +71,42 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 		return stackapi.Classify(err)
 	}
 	res.fill(r)
-	for deadline := time.Now().Add(o.timeout); o.wait && res.Status == statusPending; {
+	if o.wait {
+		if err := e.waitForMerge(&res, o); err != nil {
+			return err
+		}
+	}
+	if err := e.emit(res, func(w io.Writer) { printMerge(w, res) }); err != nil {
+		return err
+	}
+	if res.Status == statusFailed {
+		return fmt.Errorf("%w: %s", errMergeFailed, res.Message)
+	}
+	return nil
+}
+
+// mergePlan is the pull request to merge and every open layer that lands with it.
+func (e *env) mergePlan(args []string) (mergeResult, error) {
+	pr, err := e.mergeTarget(args)
+	if err != nil {
+		return mergeResult{}, err
+	}
+	res := mergeResult{PullRequest: pr.GetNumber(), PullRequests: []int{pr.GetNumber()}}
+	if pr.Stack == nil || pr.Stack.Number == nil {
+		return res, nil
+	}
+	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *pr.Stack.Number)
+	if err != nil {
+		return res, stackapi.Classify(err)
+	}
+	res.PullRequests = upTo(openNumbers(s), pr.GetNumber())
+	return res, nil
+}
+
+// waitForMerge polls until the merge request leaves pending or times out.
+func (e *env) waitForMerge(res *mergeResult, o mergeOpts) error {
+	deadline := time.Now().Add(o.timeout)
+	for res.Status == statusPending {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("still pending after %s: merge request %s", o.timeout, res.UUID)
 		}
@@ -90,19 +117,15 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 		}
 		res.fill(r)
 	}
-	if err := e.emit(res, func(w io.Writer) {
-		fmt.Fprintf(w, "%s: %s", res.Status, joinNumbers(res.PullRequests))
-		if res.Message != "" {
-			fmt.Fprintf(w, " (%s)", res.Message)
-		}
-		fmt.Fprintln(w)
-	}); err != nil {
-		return err
-	}
-	if res.Status == statusFailed {
-		return fmt.Errorf("%w: %s", errMergeFailed, res.Message)
-	}
 	return nil
+}
+
+func printMerge(w io.Writer, res mergeResult) {
+	fmt.Fprintf(w, "%s: %s", res.Status, joinNumbers(res.PullRequests))
+	if res.Message != "" {
+		fmt.Fprintf(w, " (%s)", res.Message)
+	}
+	fmt.Fprintln(w)
 }
 
 func (o mergeOpts) request() (github.PullRequestMergeAsyncRequest, error) {

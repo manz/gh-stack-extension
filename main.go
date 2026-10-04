@@ -36,9 +36,8 @@ func run(args []string, stdout, stderr io.Writer, httpClient func() (*http.Clien
 }
 
 // resolveRepo returns --repo when given, else the current repository.
-func resolveRepo(override string) (string, string, error) {
+func resolveRepo(override string) (owner, name string, err error) {
 	var r repository.Repository
-	var err error
 	if override != "" {
 		r, err = repository.Parse(override)
 	} else {

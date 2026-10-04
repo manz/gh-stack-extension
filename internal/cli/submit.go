@@ -57,7 +57,7 @@ type submitResult struct {
 func runSubmit(e *env, branches []string, o submitOpts) error {
 	if len(branches) == 0 {
 		var err error
-		if branches, err = e.currentBranches(o); err != nil {
+		if branches, err = e.currentBranches(); err != nil {
 			return err
 		}
 	}
@@ -70,17 +70,31 @@ func runSubmit(e *env, branches []string, o submitOpts) error {
 	if err != nil {
 		return err
 	}
-	toPush, err := e.changedBranches(o.remote, branches)
-	if err != nil {
+	res := submitResult{}
+	if res.Pushed, err = e.pushChanged(branches, o); err != nil {
 		return err
 	}
-	res := submitResult{Pushed: toPush}
-	if !o.dryRun && len(toPush) > 0 {
-		if err := e.Git.Push(o.remote, toPush); err != nil {
-			return err
-		}
+	if res.PullRequests, err = e.submitAll(branches, trunk, o); err != nil {
+		return err
 	}
-	var prs []int
+	if res.Stack, err = e.linkSubmitted(res.PullRequests, o.dryRun); err != nil {
+		return err
+	}
+	return e.emit(res, func(w io.Writer) { printSubmit(w, res, o) })
+}
+
+// pushChanged pushes the branches that differ from their remote-tracking ref.
+func (e *env) pushChanged(branches []string, o submitOpts) ([]string, error) {
+	toPush, err := e.changedBranches(o.remote, branches)
+	if err != nil || o.dryRun || len(toPush) == 0 {
+		return toPush, err
+	}
+	return toPush, e.Git.Push(o.remote, toPush)
+}
+
+// submitAll opens or fixes each branch's pull request, each based on the one below.
+func (e *env) submitAll(branches []string, trunk string, o submitOpts) ([]submittedPR, error) {
+	var out []submittedPR
 	for i, b := range branches {
 		base, upstream := trunk, o.remote+"/"+trunk
 		if i > 0 {
@@ -88,29 +102,33 @@ func runSubmit(e *env, branches []string, o submitOpts) error {
 		}
 		sp, err := e.submitOne(b, base, upstream, o)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		res.PullRequests = append(res.PullRequests, sp)
-		prs = append(prs, sp.Number)
+		out = append(out, sp)
+	}
+	return out, nil
+}
+
+// linkSubmitted links two or more submitted pull requests into one stack.
+func (e *env) linkSubmitted(prs []submittedPR, dryRun bool) (*linkResult, error) {
+	nums := make([]int, len(prs))
+	for i, p := range prs {
+		nums[i] = p.Number
 	}
 	switch {
-	case len(prs) < 2:
-	case contains0(prs):
-		res.Stack = &linkResult{Action: "would-link", PullRequests: prs}
-	default:
-		link, err := e.link(prs, o.dryRun)
-		if err != nil {
-			return err
-		}
-		res.Stack = &link
+	case len(nums) < 2:
+		return nil, nil
+	case contains0(nums):
+		return &linkResult{Action: "would-link", PullRequests: nums}, nil
 	}
-	return e.emit(res, func(w io.Writer) { printSubmit(w, res, o) })
+	link, err := e.link(nums, dryRun)
+	return &link, err
 }
 
 // currentBranches is what a bare submit means: the current branch's stack;
 // or, for a branch without a pull request, the open stack whose top branch
 // it was cut from, plus the branch as a new layer; or the branch alone.
-func (e *env) currentBranches(o submitOpts) ([]string, error) {
+func (e *env) currentBranches() ([]string, error) {
 	current, err := e.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
@@ -258,7 +276,7 @@ func (e *env) submitOne(branch, base, upstream string, o submitOpts) (submittedP
 
 // message is the new pull request's title and body: --message's file, else
 // the branch's first commit.
-func (e *env) message(branch, upstream string, o submitOpts) (string, string, error) {
+func (e *env) message(branch, upstream string, o submitOpts) (title, body string, err error) {
 	file, ok := o.messages[branch]
 	if !ok {
 		return e.Git.FirstCommitMessage(upstream, branch)
@@ -267,7 +285,7 @@ func (e *env) message(branch, upstream string, o submitOpts) (string, string, er
 	if err != nil {
 		return "", "", err
 	}
-	title, body, _ := strings.Cut(strings.TrimSpace(string(raw)), "\n")
+	title, body, _ = strings.Cut(strings.TrimSpace(string(raw)), "\n")
 	return title, strings.TrimSpace(body), nil
 }
 

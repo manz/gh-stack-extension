@@ -15,7 +15,7 @@ func TestNewGitHubSendsThePinnedVersion(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("X-GitHub-Api-Version")
-		w.Write([]byte(`{"number":65,"pull_requests":[{"number":62}]}`))
+		_, _ = w.Write([]byte(`{"number":65,"pull_requests":[{"number":62}]}`))
 	}))
 	defer srv.Close()
 	base := srv.URL + "/"

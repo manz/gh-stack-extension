@@ -75,7 +75,7 @@ func (r Repo) Push(remote string, branches []string) error {
 
 // FirstCommitMessage returns the subject and body of the oldest commit on
 // branch that upstream lacks.
-func (r Repo) FirstCommitMessage(upstream, branch string) (string, string, error) {
+func (r Repo) FirstCommitMessage(upstream, branch string) (subject, body string, err error) {
 	shas, err := r.git("rev-list", "--reverse", upstream+".."+branch)
 	if err != nil {
 		return "", "", err
@@ -87,6 +87,6 @@ func (r Repo) FirstCommitMessage(upstream, branch string) (string, string, error
 	if err != nil {
 		return "", "", err
 	}
-	subject, body, _ := strings.Cut(msg, "\n")
+	subject, body, _ = strings.Cut(msg, "\n")
 	return subject, strings.TrimSpace(body), nil
 }

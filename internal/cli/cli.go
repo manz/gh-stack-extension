@@ -82,7 +82,7 @@ type usageError struct{ msg string }
 
 func (u usageError) Error() string { return u.msg }
 
-func usagef(format string, args ...interface{}) error {
+func usagef(format string, args ...any) error {
 	return usageError{fmt.Sprintf(format, args...)}
 }
 
@@ -178,7 +178,7 @@ func printUsage(w io.Writer) {
 }
 
 // emit prints v as JSON with --json, or calls text otherwise.
-func (e *env) emit(v interface{}, text func(w io.Writer)) error {
+func (e *env) emit(v any, text func(w io.Writer)) error {
 	if e.json {
 		enc := json.NewEncoder(e.Out)
 		enc.SetIndent("", "  ")

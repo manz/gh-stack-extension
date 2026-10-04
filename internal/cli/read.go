@@ -78,20 +78,11 @@ func (e *env) stackNumber(args []string, pr int) (int, error) {
 			return 0, usagef("not a stack number: %q", args[0])
 		}
 		return n, nil
-	}
-	if pr == 0 {
-		branch, err := e.Git.CurrentBranch()
-		if err != nil {
+	case pr == 0:
+		var err error
+		if pr, err = e.currentPRNumber(); err != nil {
 			return 0, err
 		}
-		p, err := e.openPRForHead(branch)
-		if err != nil {
-			return 0, err
-		}
-		if p == nil {
-			return 0, fmt.Errorf("%w: no open pull request for branch %s", stackapi.ErrNotFound, branch)
-		}
-		pr = p.GetNumber()
 	}
 	p, _, err := e.PRs.Get(e.ctx, e.owner, e.repo, pr)
 	if err != nil {
@@ -101,6 +92,22 @@ func (e *env) stackNumber(args []string, pr int) (int, error) {
 		return 0, fmt.Errorf("%w: pull request #%d is not in a stack", stackapi.ErrNotFound, pr)
 	}
 	return *p.Stack.Number, nil
+}
+
+// currentPRNumber is the open pull request whose head is the current branch.
+func (e *env) currentPRNumber() (int, error) {
+	branch, err := e.Git.CurrentBranch()
+	if err != nil {
+		return 0, err
+	}
+	p, err := e.openPRForHead(branch)
+	if err != nil {
+		return 0, err
+	}
+	if p == nil {
+		return 0, fmt.Errorf("%w: no open pull request for branch %s", stackapi.ErrNotFound, branch)
+	}
+	return p.GetNumber(), nil
 }
 
 // openPRForHead returns the open pull request whose head is branch, or nil.

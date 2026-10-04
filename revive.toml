@@ -1,0 +1,64 @@
+# revive: go tool revive -config revive.toml ./...  (run by make lint)
+severity = "error"
+confidence = 0.8
+errorCode = 1
+warningCode = 1
+
+# defaults
+[rule.blank-imports]
+[rule.context-as-argument]
+[rule.context-keys-type]
+[rule.dot-imports]
+[rule.empty-block]
+[rule.error-naming]
+[rule.error-return]
+[rule.error-strings]
+[rule.errorf]
+[rule.exported]
+[rule.increment-decrement]
+[rule.indent-error-flow]
+[rule.package-comments]
+[rule.range]
+[rule.receiver-naming]
+[rule.redefines-builtin-id]
+[rule.superfluous-else]
+[rule.time-naming]
+[rule.unexported-return]
+[rule.unreachable-code]
+[rule.unused-parameter]
+[rule.var-declaration]
+[rule.var-naming]
+
+# keep functions small and readable (Sonar: cognitive complexity <= 15)
+[rule.cognitive-complexity]
+arguments = [15]
+[rule.cyclomatic]
+arguments = [12]
+exclude = ["TEST"] # a test with many checks is not branching logic
+[rule.function-length]
+arguments = [50, 0] # statements, lines (0 = off)
+[rule.argument-limit]
+arguments = [5]
+[rule.function-result-limit]
+arguments = [4]
+[rule.max-control-nesting]
+arguments = [4]
+
+# correctness
+[rule.unhandled-error]
+arguments = ["fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "strings.Builder.WriteString"]
+[rule.defer]
+[rule.deep-exit]
+[rule.unconditional-recursion]
+[rule.identical-branches]
+[rule.waitgroup-by-value]
+[rule.atomic]
+[rule.bool-literal-in-expr]
+[rule.constant-logical-expr]
+[rule.confusing-results]
+[rule.early-return]
+[rule.if-return]
+[rule.useless-break]
+[rule.use-any]
+[rule.unused-receiver]
+[rule.import-shadowing]

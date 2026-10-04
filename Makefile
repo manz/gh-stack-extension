@@ -15,8 +15,9 @@ cover:  ## Run the tests and fail under COVERAGE_MIN percent total coverage
 	echo "total coverage: $$total% (minimum $(COVERAGE_MIN)%)"; \
 	awk -v t="$$total" -v m="$(COVERAGE_MIN)" 'BEGIN { exit (t + 0 < m) }' || { echo "coverage below $(COVERAGE_MIN)%"; exit 1; }
 
-lint:  ## gofmt and go vet
+lint:  ## gofmt, go vet and revive
 	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "gofmt needed: $$unformatted"; exit 1; fi
 	go vet ./...
+	go tool revive -config revive.toml -formatter friendly ./...
 
 check: lint cover  ## Everything CI runs

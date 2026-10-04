@@ -34,7 +34,7 @@ func apiError(status int, msg string) error {
 	return &github.ErrorResponse{Response: &http.Response{StatusCode: status}, Message: msg}
 }
 
-func (f *fakeGitHub) record(name string, args ...interface{}) error {
+func (f *fakeGitHub) record(name string, args ...any) error {
 	f.calls = append(f.calls, strings.TrimSuffix(name+" "+fmt.Sprintln(args...), "\n"))
 	return f.fail[name]
 }
@@ -333,7 +333,7 @@ func (f *fakeGitHub) Edit(_ context.Context, _, _ string, n int, p *github.PullR
 	return f.prs[n], nil, nil
 }
 
-func (g *fakeGit) FirstCommitMessage(upstream, branch string) (string, string, error) {
+func (g *fakeGit) FirstCommitMessage(upstream, branch string) (subject, body string, err error) {
 	if err := g.failOp["FirstCommitMessage"]; err != nil {
 		return "", "", err
 	}

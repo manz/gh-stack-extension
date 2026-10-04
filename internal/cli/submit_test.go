@@ -67,7 +67,7 @@ func TestSubmitFromTheCurrentStackSkipsMergedLayers(t *testing.T) {
 	h.chain(3)
 	h.gh.setStack(65, []int{1, 2, 3})
 	h.gh.stacks[65].PullRequests[0].State = "closed"
-	h.gh.prs[2].Base.Ref = github_ptr("main")
+	h.gh.prs[2].Base.Ref = githubPtr("main")
 	h.local("b2", "b3")
 	h.git.branch = "b3"
 	if code := h.run("submit", "--json"); code != ExitOK {
@@ -100,7 +100,9 @@ func TestSubmitDryRunChangesNothing(t *testing.T) {
 func TestSubmitMessageFileAndDraft(t *testing.T) {
 	h := newHarness()
 	msg := filepath.Join(t.TempDir(), "m")
-	os.WriteFile(msg, []byte("Custom title\n\nCustom body\n"), 0o600)
+	if err := os.WriteFile(msg, []byte("Custom title\n\nCustom body\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	h.local("b1")
 	if code := h.run("submit", "--base", "main", "--draft", "--message", "b1="+msg, "b1"); code != ExitOK {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
