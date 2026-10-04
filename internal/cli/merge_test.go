@@ -20,12 +20,12 @@ func stacked3() *harness {
 func TestMergeDryRunListsWhatLands(t *testing.T) {
 	h := stacked3()
 	h.gh.stacks[65].PullRequests[0].MergedAt = &github.Timestamp{}
-	if code := h.run("merge", "2", "--dry-run"); code != ExitOK || h.out.String() != "would merge #2\n" {
+	if code := h.run("merge", "2", "--repo", "manz/ff4", "--dry-run"); code != ExitOK || h.out.String() != "would merge manz/ff4 #2\n" {
 		t.Fatalf("code=%d out=%q", code, h.out.String())
 	}
 	h = stacked3()
 	h.git.branch = "b3"
-	if code := h.run("merge", "--dry-run"); code != ExitOK || h.out.String() != "would merge #1 → #2 → #3\n" {
+	if code := h.run("merge", "--dry-run"); code != ExitOK || h.out.String() != "would merge manz/ff4 #1 → #2 → #3\n" {
 		t.Fatalf("out=%q err=%q", h.out.String(), h.err.String())
 	}
 	for _, c := range h.gh.calls {
@@ -38,7 +38,7 @@ func TestMergeDryRunListsWhatLands(t *testing.T) {
 func TestMergeWaitsUntilMerged(t *testing.T) {
 	h := stacked3()
 	h.gh.merges = []string{"pending", "pending", "merged"}
-	if code := h.run("merge", "3", "--wait", "--method", "squash", "--direct", "--interval", "2s", "--json"); code != ExitOK {
+	if code := h.run("merge", "3", "--repo", "manz/ff4", "--wait", "--method", "squash", "--direct", "--interval", "2s", "--json"); code != ExitOK {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
 	var r mergeResult
@@ -52,12 +52,12 @@ func TestMergeWaitsUntilMerged(t *testing.T) {
 
 func TestMergeWithoutWaitReportsPendingAndQueue(t *testing.T) {
 	h := stacked3()
-	if code := h.run("merge", "1", "--queue"); code != ExitOK || h.out.String() != "pending: #1\n" || h.gh.calls[len(h.gh.calls)-1] != "MergeAsync 1  merge_queue" {
+	if code := h.run("merge", "1", "--repo", "manz/ff4", "--queue"); code != ExitOK || h.out.String() != "pending: manz/ff4 #1\n" || h.gh.calls[len(h.gh.calls)-1] != "MergeAsync 1  merge_queue" {
 		t.Fatalf("out=%q calls=%v", h.out.String(), h.gh.calls)
 	}
 	h = stacked3()
 	h.gh.merges = []string{"enqueued"}
-	if code := h.run("merge", "2", "--wait"); code != ExitOK || !strings.HasPrefix(h.out.String(), "enqueued: #1 → #2") || len(h.slept) != 0 {
+	if code := h.run("merge", "2", "--repo", "manz/ff4", "--wait"); code != ExitOK || !strings.HasPrefix(h.out.String(), "enqueued: manz/ff4 #1 → #2") || len(h.slept) != 0 {
 		t.Fatalf("out=%q", h.out.String())
 	}
 }
@@ -66,14 +66,14 @@ func TestMergeFailureExitsWithItsCode(t *testing.T) {
 	h := stacked3()
 	h.gh.merges = []string{"pending", "failed"}
 	h.gh.mergeMsg = "required check failed"
-	if code := h.run("merge", "2", "--wait"); code != ExitMergeFailed || !strings.Contains(h.out.String(), "failed: #1 → #2 (required check failed)") {
+	if code := h.run("merge", "2", "--repo", "manz/ff4", "--wait"); code != ExitMergeFailed || !strings.Contains(h.out.String(), "failed: manz/ff4 #1 → #2 (required check failed)") {
 		t.Fatalf("code=%d out=%q", code, h.out.String())
 	}
 }
 
 func TestMergeTimesOut(t *testing.T) {
 	h := stacked3()
-	if code := h.run("merge", "1", "--wait", "--timeout", "-1s"); code != ExitError || !strings.Contains(h.err.String(), "still pending") {
+	if code := h.run("merge", "1", "--repo", "manz/ff4", "--wait", "--timeout", "-1s"); code != ExitError || !strings.Contains(h.err.String(), "still pending") {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
 }
@@ -81,7 +81,7 @@ func TestMergeTimesOut(t *testing.T) {
 func TestMergeArgumentErrors(t *testing.T) {
 	h := stacked3()
 	for _, args := range [][]string{
-		{"merge", "1", "--method", "fast-forward"}, {"merge", "1", "--queue", "--direct"}, {"merge", "x"}, {"merge", "1", "2"},
+		{"merge", "1", "--repo", "manz/ff4", "--method", "fast-forward"}, {"merge", "1", "--repo", "manz/ff4", "--queue", "--direct"}, {"merge", "x", "--repo", "manz/ff4"}, {"merge", "1", "2", "--repo", "manz/ff4"},
 	} {
 		if code := h.run(args...); code != ExitUsage {
 			t.Errorf("%v code=%d", args, code)
@@ -92,20 +92,20 @@ func TestMergeArgumentErrors(t *testing.T) {
 func TestMergeAPIErrors(t *testing.T) {
 	h := stacked3()
 	h.gh.fail["MergeAsync"] = apiError(409, "merge already pending")
-	if code := h.run("merge", "1"); code != ExitConflict || !strings.Contains(h.err.String(), "merge already pending") {
+	if code := h.run("merge", "1", "--repo", "manz/ff4"); code != ExitConflict || !strings.Contains(h.err.String(), "merge already pending") {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
 	h = stacked3()
 	h.gh.fail["GetMergeAsyncResult"] = apiError(404, "expired")
-	if code := h.run("merge", "1", "--wait"); code != ExitNotFound {
+	if code := h.run("merge", "1", "--repo", "manz/ff4", "--wait"); code != ExitNotFound {
 		t.Fatalf("code=%d", code)
 	}
 	h = stacked3()
 	h.gh.fail["GetStack"] = apiError(404, "gone")
-	if code := h.run("merge", "1"); code != ExitNotFound {
+	if code := h.run("merge", "1", "--repo", "manz/ff4"); code != ExitNotFound {
 		t.Fatalf("code=%d", code)
 	}
-	if code := h.run("merge", "77"); code != ExitNotFound {
+	if code := h.run("merge", "77", "--repo", "manz/ff4"); code != ExitNotFound {
 		t.Fatalf("code=%d", code)
 	}
 }
@@ -132,7 +132,7 @@ func TestMergeALonePullRequest(t *testing.T) {
 	h := newHarness()
 	h.gh.addPR(9, "solo", "main")
 	h.gh.merges = []string{"merged"}
-	if code := h.run("merge", "9"); code != ExitOK || h.out.String() != "merged: #9\n" {
+	if code := h.run("merge", "9", "--repo", "manz/ff4"); code != ExitOK || h.out.String() != "merged: manz/ff4 #9\n" {
 		t.Fatalf("code=%d out=%q", code, h.out.String())
 	}
 }
@@ -150,7 +150,7 @@ func TestMergeWaitsThroughGitHubsAcceptedAnswers(t *testing.T) {
 	h := stacked3()
 	h.gh.accept = true // every answer is an HTTP 202, as GitHub sends it
 	h.gh.merges = []string{"pending", "pending", "merged"}
-	if code := h.run("merge", "3", "--wait"); code != ExitOK || h.out.String() != "merged: #1 → #2 → #3\n" || len(h.slept) != 2 {
+	if code := h.run("merge", "3", "--repo", "manz/ff4", "--wait"); code != ExitOK || h.out.String() != "merged: manz/ff4 #1 → #2 → #3\n" || len(h.slept) != 2 {
 		t.Fatalf("code=%d out=%q err=%q slept=%v", code, h.out.String(), h.err.String(), h.slept)
 	}
 }
@@ -159,7 +159,24 @@ func TestMergeReportsAnUnreadableAcceptedBody(t *testing.T) {
 	h := stacked3()
 	h.gh.accept = true
 	h.gh.acceptRaw = "not json"
-	if code := h.run("merge", "3"); code != ExitError || !strings.Contains(h.err.String(), "reading the accepted merge request") {
+	if code := h.run("merge", "3", "--repo", "manz/ff4"); code != ExitError || !strings.Contains(h.err.String(), "reading the accepted merge request") {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+}
+
+func TestMergeOfANumberRequiresTheRepository(t *testing.T) {
+	h := stacked3()
+	if code := h.run("merge", "3", "--wait"); code != ExitUsage || !strings.Contains(h.err.String(), "merge 3 needs --repo OWNER/REPO") {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+	for _, c := range h.gh.calls {
+		if strings.HasPrefix(c, "MergeAsync") {
+			t.Fatal("merged without --repo")
+		}
+	}
+	h.git.branch = "b3" // the current branch's pull request needs no --repo
+	h.gh.merges = []string{"merged"}
+	if code := h.run("merge"); code != ExitOK || h.out.String() != "merged: manz/ff4 #1 → #2 → #3\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, h.out.String(), h.err.String())
 	}
 }
