@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	register("merge", command{usage: "merge or queue PR (default: the current branch's) and every stack layer below it", setup: mergeFlags})
+	register("merge", command{usage: "merge or queue the current branch's PR, or PR with --repo, and every stack layer below it", setup: mergeFlags})
 }
 
 type mergeOpts struct {
@@ -48,6 +48,7 @@ const (
 )
 
 type mergeResult struct {
+	Repository   string `json:"repository"`
 	Status       string `json:"status"`
 	UUID         string `json:"uuid,omitempty"`
 	Message      string `json:"message,omitempty"`
@@ -66,7 +67,9 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 	}
 	if o.dryRun {
 		res.Status = "would-merge"
-		return e.emit(res, func(w io.Writer) { fmt.Fprintf(w, "would merge %s\n", joinNumbers(res.PullRequests)) })
+		return e.emit(res, func(w io.Writer) {
+			fmt.Fprintf(w, "would merge %s %s\n", res.Repository, joinNumbers(res.PullRequests))
+		})
 	}
 	r, err := accepted(e.PRs.MergeAsync(e.ctx, e.owner, e.repo, res.PullRequest, req))
 	if err != nil {
@@ -93,7 +96,7 @@ func (e *env) mergePlan(args []string) (mergeResult, error) {
 	if err != nil {
 		return mergeResult{}, err
 	}
-	res := mergeResult{PullRequest: pr.GetNumber(), PullRequests: []int{pr.GetNumber()}}
+	res := mergeResult{Repository: e.owner + "/" + e.repo, PullRequest: pr.GetNumber(), PullRequests: []int{pr.GetNumber()}}
 	if pr.Stack == nil || pr.Stack.Number == nil {
 		return res, nil
 	}
@@ -137,7 +140,7 @@ func accepted(r *github.PullRequestMergeAsyncResult, _ *github.Response, err err
 }
 
 func printMerge(w io.Writer, res mergeResult) {
-	fmt.Fprintf(w, "%s: %s", res.Status, joinNumbers(res.PullRequests))
+	fmt.Fprintf(w, "%s: %s %s", res.Status, res.Repository, joinNumbers(res.PullRequests))
 	if res.Message != "" {
 		fmt.Fprintf(w, " (%s)", res.Message)
 	}
@@ -205,6 +208,9 @@ func (e *env) mergeTarget(args []string) (*github.PullRequest, error) {
 		n, err := strconv.Atoi(args[0])
 		if err != nil || n <= 0 {
 			return nil, usagef("not a pull request number: %q", args[0])
+		}
+		if !e.repoGiven {
+			return nil, usagef("merge %d needs --repo OWNER/REPO: a pull request number means nothing without its repository", n)
 		}
 		p, _, err := e.PRs.Get(e.ctx, e.owner, e.repo, n)
 		return p, stackapi.Classify(err)

@@ -59,6 +59,8 @@ type env struct {
 	owner string
 	repo  string
 	json  bool
+	// repoGiven is true when --repo named the repository explicitly.
+	repoGiven bool
 }
 
 // command declares its flags in setup, which returns the function that runs
@@ -118,7 +120,7 @@ func Run(ctx context.Context, args []string, d Deps) int {
 		fmt.Fprintln(d.Err, err)
 		return ExitError
 	}
-	e := &env{Deps: d, ctx: ctx, owner: owner, repo: name, json: *asJSON}
+	e := &env{Deps: d, ctx: ctx, owner: owner, repo: name, json: *asJSON, repoGiven: *repoFlag != ""}
 	if err := run(e, positional); err != nil {
 		fmt.Fprintln(d.Err, err)
 		return exitCode(err)
