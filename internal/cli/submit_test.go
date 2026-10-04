@@ -2,11 +2,14 @@ package cli
 
 import (
 	"encoding/json"
+
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-github/v92/github"
 )
 
 func decodeSubmit(t *testing.T, h *harness) submitResult {
@@ -119,9 +122,6 @@ func TestSubmitMessageFileAndDraft(t *testing.T) {
 func TestSubmitErrors(t *testing.T) {
 	h := newHarness()
 	h.local("b1", "lonely")
-	if code := h.run("submit", "b1"); code != ExitUsage || !strings.Contains(h.err.String(), "pass --base") {
-		t.Fatalf("code=%d err=%q", code, h.err.String())
-	}
 	if code := h.run("submit", "--message", "bad", "b1"); code != ExitUsage {
 		t.Fatalf("code=%d", code)
 	}
@@ -131,8 +131,8 @@ func TestSubmitErrors(t *testing.T) {
 	if code := h.run("submit", "--base", "main", "--message", "b1=/nonexistent/file", "b1"); code != ExitError {
 		t.Fatalf("code=%d", code)
 	}
-	h.git.branch = "lonely"
-	if code := h.run("submit"); code != ExitUsage || !strings.Contains(h.err.String(), "lonely has no pull request yet") {
+	h.git.failOp["DefaultBranch"] = errors.New("no remote HEAD")
+	if code := h.run("submit", "b1"); code != ExitError || !strings.Contains(h.err.String(), "no remote HEAD") {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
 }
@@ -190,19 +190,6 @@ func TestSubmitPutsANewBranchOnTopOfTheStackItWasCutFrom(t *testing.T) {
 	}
 }
 
-func TestSubmitABranchOnNoStackNeedsABase(t *testing.T) {
-	h := synced()
-	h.git.commit("z", "m0")
-	h.git.refs["refs/heads/side"] = "z"
-	h.git.branch = "side"
-	if code := h.run("submit"); code != ExitUsage || !strings.Contains(h.err.String(), "pass --base") {
-		t.Fatalf("code=%d err=%q", code, h.err.String())
-	}
-	if code := h.run("submit", "--base", "main"); code != ExitOK || !strings.Contains(h.out.String(), "created #201 (side → main)") {
-		t.Fatalf("code=%d out=%q err=%q", code, h.out.String(), h.err.String())
-	}
-}
-
 func TestSubmitALoneOpenPullRequest(t *testing.T) {
 	h := newHarness()
 	h.gh.addPR(7, "solo", "main")
@@ -210,52 +197,6 @@ func TestSubmitALoneOpenPullRequest(t *testing.T) {
 	h.git.branch = "solo"
 	if code := h.run("submit"); code != ExitOK || !strings.Contains(h.out.String(), "unchanged #7 (solo → main)") {
 		t.Fatalf("code=%d out=%q", code, h.out.String())
-	}
-}
-
-func TestSubmitSkipsClosedAndUncheckedStacksWhenLookingBelow(t *testing.T) {
-	h := synced()
-	h.gh.stacks[65].Open = false
-	h.chain(0)
-	h.gh.addPR(8, "c1", "main")
-	h.gh.addPR(9, "c2", "c1")
-	h.gh.setStack(66, []int{8, 9}) // top branch c2 not checked out
-	h.git.commit("n4", "sha-b3")
-	h.git.refs["refs/heads/b4"] = "n4"
-	h.git.branch = "b4"
-	if code := h.run("submit"); code != ExitUsage {
-		t.Fatalf("code=%d err=%q", code, h.err.String())
-	}
-}
-
-func TestSubmitCurrentBranchErrors(t *testing.T) {
-	h := synced()
-	h.git.err = errors.New("detached HEAD")
-	if code := h.run("submit"); code != ExitError {
-		t.Fatalf("code=%d", code)
-	}
-	h = synced()
-	h.git.branch = "b2"
-	h.gh.fail["GetStack"] = apiError(404, "gone")
-	if code := h.run("submit"); code != ExitNotFound {
-		t.Fatalf("code=%d", code)
-	}
-	h = synced()
-	h.git.commit("n4", "sha-b3")
-	h.git.refs["refs/heads/b4"] = "n4"
-	h.git.branch = "b4"
-	h.gh.fail["ListStacks"] = apiError(422, "x")
-	if code := h.run("submit"); code != ExitValidation {
-		t.Fatalf("code=%d", code)
-	}
-	h.gh.fail = map[string]error{"GetStack": apiError(404, "x")}
-	if code := h.run("submit"); code != ExitNotFound {
-		t.Fatalf("code=%d", code)
-	}
-	h.gh.fail = map[string]error{}
-	h.git.failOp["BranchSHA"] = errors.New("git broke")
-	if code := h.run("submit"); code != ExitError {
-		t.Fatalf("code=%d", code)
 	}
 }
 
@@ -285,5 +226,138 @@ func TestSubmitPushesOnlyChangedBranchesAndNeedsThemLocally(t *testing.T) {
 	h.git.failOp["RefSHA"] = errors.New("git broke")
 	if code := h.run("submit", "b1"); code != ExitError {
 		t.Fatalf("code=%d", code)
+	}
+}
+
+// over builds stack 65 (b1 <- b2 <- b3, in sync) and new local branches cut
+// one from another on top of b3.
+func over(names ...string) *harness {
+	h := synced()
+	parent := "sha-b3"
+	for _, n := range names {
+		h.git.commit("n-"+n, parent)
+		h.git.refs["refs/heads/"+n] = "n-" + n
+		parent = "n-" + n
+	}
+	h.git.branch = names[len(names)-1]
+	return h
+}
+
+func TestSubmitSeveralNewBranchesCutFromAStack(t *testing.T) {
+	h := over("b4", "b5")
+	if code := h.run("submit", "--json"); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+	r := decodeSubmit(t, h)
+	var got []string
+	for _, p := range r.PullRequests {
+		got = append(got, p.Branch+">"+p.Base)
+	}
+	if strings.Join(got, " ") != "b1>main b2>b1 b3>b2 b4>b3 b5>b4" || strings.Join(r.Pushed, " ") != "b4 b5" {
+		t.Fatalf("prs=%v pushed=%v", got, r.Pushed)
+	}
+	if r.Stack.Action != actionAdded || r.Stack.Stack.Number != 65 || len(r.Stack.Added) != 2 {
+		t.Fatalf("%+v", r.Stack)
+	}
+}
+
+func TestSubmitTurnsLonePullRequestsIntoAStack(t *testing.T) {
+	h := newHarness()
+	h.git.commit("m0", "")
+	h.git.refs["refs/remotes/origin/main"] = "m0"
+	h.git.commit("a1", "m0")
+	h.git.commit("a2", "a1")
+	h.git.refs["refs/heads/fix"] = "a1"
+	h.git.refs["refs/remotes/origin/fix"] = "a1"
+	h.git.refs["refs/heads/feat"] = "a2"
+	h.gh.addPR(11, "fix", "main") // a lone pull request, no stack
+	h.git.branch = "feat"
+	if code := h.run("submit"); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+	want := "pushed to origin: feat\n  unchanged #11 (fix → main)\n  created #201 (feat → fix)\ncreated stack 101: #11 → #201\n"
+	if h.out.String() != want {
+		t.Fatalf("out=%q", h.out.String())
+	}
+}
+
+func TestSubmitIgnoresBranchesAlreadyInTheTrunk(t *testing.T) {
+	h := over("b4")
+	h.git.refs["refs/heads/old"] = "m0" // merged long ago
+	h.git.refs["refs/heads/main"] = "m0"
+	if code := h.run("submit", "--json"); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+	if r := decodeSubmit(t, h); len(r.PullRequests) != 4 {
+		t.Fatalf("%+v", r.PullRequests)
+	}
+}
+
+func TestSubmitRefusesAFork(t *testing.T) {
+	h := newHarness()
+	h.git.commit("m0", "")
+	h.git.refs["refs/remotes/origin/main"] = "m0"
+	h.git.commit("x", "m0")
+	h.git.commit("y", "m0")
+	h.git.commit("top", "x")
+	h.git.parents["top"] = "x"
+	h.git.refs["refs/heads/x"] = "x"
+	h.git.refs["refs/heads/twin"] = "x" // same commit as x
+	h.git.refs["refs/heads/top"] = "top"
+	h.git.branch = "top"
+	if code := h.run("submit"); code != ExitValidation || !strings.Contains(h.err.String(), "twin and x are not one on top of the other") {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+}
+
+func TestSubmitBareErrors(t *testing.T) {
+	h := over("b4")
+	h.git.err = errors.New("detached HEAD")
+	if code := h.run("submit"); code != ExitError {
+		t.Fatalf("code=%d", code)
+	}
+	for op, code := range map[string]int{"LocalBranches": ExitError, "RefSHA": ExitError, "DefaultBranch": ExitError} {
+		h = over("b4")
+		h.git.failOp[op] = errors.New(op + " broke")
+		if got := h.run("submit"); got != code {
+			t.Errorf("%s: code=%d err=%q", op, got, h.err.String())
+		}
+	}
+	h = synced()
+	h.git.branch = "b2"
+	h.gh.fail["GetStack"] = apiError(404, "gone")
+	if code := h.run("submit"); code != ExitNotFound {
+		t.Fatalf("code=%d", code)
+	}
+	h = over("b4")
+	h.gh.fail["List"] = apiError(422, "x")
+	if code := h.run("submit"); code != ExitValidation {
+		t.Fatalf("code=%d", code)
+	}
+}
+
+func TestSubmitALoneBranchTargetsTheDefaultBranch(t *testing.T) {
+	h := synced()
+	h.git.commit("z", "m0")
+	h.git.refs["refs/heads/side"] = "z"
+	h.git.branch = "side"
+	if code := h.run("submit"); code != ExitOK || !strings.Contains(h.out.String(), "created #201 (side → main)") {
+		t.Fatalf("code=%d out=%q err=%q", code, h.out.String(), h.err.String())
+	}
+}
+
+func TestSubmitRefusesABranchAlreadyMerged(t *testing.T) {
+	h := over("b4", "b5")
+	merged := h.gh.addPR(9, "b4", "b3")
+	merged.State = githubPtr("closed")
+	merged.MergedAt = &github.Timestamp{}
+	if code := h.run("submit"); code != ExitConflict || !strings.Contains(h.err.String(), "b4 already merged as #9; run git fetch origin and rebase onto origin/main") {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+	h = over("b4")
+	h.gh.fail["List"] = nil
+	h.gh.addPR(8, "b4", "b3").State = githubPtr("closed") // closed unmerged: fine
+	if code := h.run("submit", "--dry-run"); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
 }
