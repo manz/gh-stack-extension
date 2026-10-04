@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -66,7 +68,7 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 		res.Status = "would-merge"
 		return e.emit(res, func(w io.Writer) { fmt.Fprintf(w, "would merge %s\n", joinNumbers(res.PullRequests)) })
 	}
-	r, _, err := e.PRs.MergeAsync(e.ctx, e.owner, e.repo, res.PullRequest, req)
+	r, err := accepted(e.PRs.MergeAsync(e.ctx, e.owner, e.repo, res.PullRequest, req))
 	if err != nil {
 		return stackapi.Classify(err)
 	}
@@ -111,13 +113,27 @@ func (e *env) waitForMerge(res *mergeResult, o mergeOpts) error {
 			return fmt.Errorf("still pending after %s: merge request %s", o.timeout, res.UUID)
 		}
 		e.sleep(o.interval)
-		r, _, err := e.PRs.GetMergeAsyncResult(e.ctx, e.owner, e.repo, res.PullRequest, res.UUID)
+		r, err := accepted(e.PRs.GetMergeAsyncResult(e.ctx, e.owner, e.repo, res.PullRequest, res.UUID))
 		if err != nil {
 			return stackapi.Classify(err)
 		}
 		res.fill(r)
 	}
 	return nil
+}
+
+// accepted turns go-github's AcceptedError (HTTP 202, the normal answer to
+// an async merge) back into the merge result its body carries.
+func accepted(r *github.PullRequestMergeAsyncResult, _ *github.Response, err error) (*github.PullRequestMergeAsyncResult, error) {
+	var acc *github.AcceptedError
+	if !errors.As(err, &acc) {
+		return r, err
+	}
+	r = &github.PullRequestMergeAsyncResult{}
+	if jsonErr := json.Unmarshal(acc.Raw, r); jsonErr != nil {
+		return nil, fmt.Errorf("reading the accepted merge request: %w", jsonErr)
+	}
+	return r, nil
 }
 
 func printMerge(w io.Writer, res mergeResult) {
