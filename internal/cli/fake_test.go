@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,6 +25,8 @@ type fakeGitHub struct {
 	pageSize  int              // ListStacks page size; 0 = all at once
 	merges    []string         // statuses MergeAsync then each poll return
 	mergeMsg  string
+	accept    bool   // answer like GitHub: HTTP 202 (AcceptedError)
+	acceptRaw string // body to put in the AcceptedError, if not the result
 }
 
 func newFake() *fakeGitHub {
@@ -361,12 +364,26 @@ func (f *fakeGitHub) MergeAsync(_ context.Context, _, _ string, n int, b github.
 	if err := f.record("MergeAsync", n, b.GetMergeMethod(), b.GetMergeAction()); err != nil {
 		return nil, nil, err
 	}
-	return f.mergeResult(), nil, nil
+	return f.answer()
 }
 
 func (f *fakeGitHub) GetMergeAsyncResult(_ context.Context, _, _ string, n int, uuid string) (*github.PullRequestMergeAsyncResult, *github.Response, error) {
 	if err := f.record("GetMergeAsyncResult", n, uuid); err != nil {
 		return nil, nil, err
 	}
-	return f.mergeResult(), nil, nil
+	return f.answer()
+}
+
+func (f *fakeGitHub) answer() (*github.PullRequestMergeAsyncResult, *github.Response, error) {
+	r := f.mergeResult()
+	// GitHub answers a pending merge with HTTP 202, which go-github returns
+	// as an AcceptedError; a settled one with 200.
+	if !f.accept && r.GetStatus() != statusPending {
+		return r, nil, nil
+	}
+	raw, _ := json.Marshal(r)
+	if f.acceptRaw != "" {
+		raw = []byte(f.acceptRaw)
+	}
+	return nil, nil, &github.AcceptedError{Raw: raw}
 }

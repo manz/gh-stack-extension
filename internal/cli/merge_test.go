@@ -145,3 +145,21 @@ func TestSleepDefaultsToTimeSleep(t *testing.T) {
 		t.Fatal("did not sleep")
 	}
 }
+
+func TestMergeWaitsThroughGitHubsAcceptedAnswers(t *testing.T) {
+	h := stacked3()
+	h.gh.accept = true // every answer is an HTTP 202, as GitHub sends it
+	h.gh.merges = []string{"pending", "pending", "merged"}
+	if code := h.run("merge", "3", "--wait"); code != ExitOK || h.out.String() != "merged: #1 → #2 → #3\n" || len(h.slept) != 2 {
+		t.Fatalf("code=%d out=%q err=%q slept=%v", code, h.out.String(), h.err.String(), h.slept)
+	}
+}
+
+func TestMergeReportsAnUnreadableAcceptedBody(t *testing.T) {
+	h := stacked3()
+	h.gh.accept = true
+	h.gh.acceptRaw = "not json"
+	if code := h.run("merge", "3"); code != ExitError || !strings.Contains(h.err.String(), "reading the accepted merge request") {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+}
