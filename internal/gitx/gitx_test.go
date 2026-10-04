@@ -63,18 +63,31 @@ func TestRefsAncestryRestackAndPush(t *testing.T) {
 	if !r.IsAncestor(a, b) || r.IsAncestor(b, a) {
 		t.Fatal("ancestry")
 	}
-	// main moves on; restacking b onto main carries a along.
-	r.must(t, "checkout", "-q", "main")
-	r.must(t, "commit", "-q", "--allow-empty", "-m", "main 2")
-	main, _ := r.RefSHA("refs/heads/main")
-	r.must(t, "checkout", "-q", "b")
-	if err := r.RestackOnto("main", "b"); err != nil {
+	// a gains a fix; rebasing b onto it replays only b's own commit.
+	r.must(t, "checkout", "-q", "a")
+	r.must(t, "commit", "-q", "--allow-empty", "-m", "fix a")
+	fixed, _ := r.BranchSHA("a")
+	if base, err := r.MergeBase(fixed, b); err != nil || base != a {
+		t.Fatalf("merge-base=%q err=%v", base, err)
+	}
+	if err := r.RebaseOnto("a", a, "b"); err != nil {
 		t.Fatal(err)
 	}
-	a2, _ := r.BranchSHA("a")
 	b2, _ := r.BranchSHA("b")
-	if a2 == a || b2 == b || !r.IsAncestor(main, a2) || !r.IsAncestor(a2, b2) {
-		t.Fatal("restack did not move both branches onto main")
+	if b2 == b || !r.IsAncestor(fixed, b2) {
+		t.Fatal("b was not moved onto the fixed a")
+	}
+	if n, _ := r.git("rev-list", "--count", fixed+".."+b2); n != "1" {
+		t.Fatalf("replayed %s commits, want 1", n)
+	}
+	if err := r.Checkout("main"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, _ := r.CurrentBranch(); cur != "main" {
+		t.Fatal(cur)
+	}
+	if err := r.RebaseOnto("nope", a, "b"); err == nil {
+		t.Fatal("rebase onto a missing ref must fail")
 	}
 	// push to a bare remote
 	remote := t.TempDir()

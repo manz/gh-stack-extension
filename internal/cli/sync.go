@@ -149,12 +149,15 @@ func runStatus(e *env, args []string, o stackOpts) error {
 }
 
 type restackResult struct {
-	Action   string            `json:"action"`
-	Upstream string            `json:"upstream"`
-	Top      string            `json:"top"`
-	Branches map[string]string `json:"branches"` // branch -> local sha after
+	Action    string            `json:"action"`
+	Restacked []string          `json:"restacked"` // bottom first
+	Branches  map[string]string `json:"branches"`  // branch -> local sha after
 }
 
+// runRestack walks the open layers bottom up. A layer whose parent's tip is
+// not in its history gets its own commits replayed onto the parent: the old
+// parent tip is GitHub's head of the layer below (what it was built on), or
+// the merge-base for the bottom layer. Fixing a middle layer so carries up.
 func runRestack(e *env, args []string, o stackOpts) error {
 	s, err := e.loadStack(args, o)
 	if err != nil {
@@ -167,38 +170,79 @@ func runRestack(e *env, args []string, o stackOpts) error {
 	var open []layer
 	for _, l := range ls {
 		if !l.MergedOrClosed {
+			if l.Sync == syncMissing {
+				return fmt.Errorf("%w: branch %s (#%d) is not checked out locally", stackapi.ErrNotFound, l.Branch, l.Number)
+			}
 			open = append(open, l)
 		}
 	}
 	if len(open) == 0 {
 		return fmt.Errorf("%w: stack %d has no open pull requests", stackapi.ErrValidation, s.Number)
 	}
-	res := restackResult{Action: "unchanged", Upstream: open[0].Parent, Top: open[len(open)-1].Branch, Branches: map[string]string{}}
-	need := false
-	for _, l := range open {
-		if l.Sync == syncMissing {
-			return fmt.Errorf("%w: branch %s (#%d) is not checked out locally", stackapi.ErrNotFound, l.Branch, l.Number)
-		}
-		need = need || l.NeedsRestack
+	current, err := e.Git.CurrentBranch()
+	if err != nil {
+		return err
 	}
-	if need {
+	res := restackResult{Action: actionUnchanged, Restacked: []string{}, Branches: map[string]string{}}
+	moving := false // under --dry-run, everything above a moved layer moves too
+	for i, l := range open {
+		parent, parentSHA, oldBase, err := e.parentOf(open, i)
+		if err != nil {
+			return err
+		}
+		local, err := e.Git.BranchSHA(l.Branch)
+		if err != nil {
+			return err
+		}
+		if !moving && (parentSHA == "" || e.Git.IsAncestor(parentSHA, local)) {
+			res.Branches[l.Branch] = local
+			continue
+		}
+		res.Restacked = append(res.Restacked, l.Branch)
+		if o.dryRun {
+			moving = true
+			res.Branches[l.Branch] = local
+			continue
+		}
+		if oldBase == "" || !e.Git.HasCommit(oldBase) || !e.Git.IsAncestor(oldBase, local) {
+			if oldBase, err = e.Git.MergeBase(parentSHA, local); err != nil {
+				return err
+			}
+		}
+		if err := e.Git.RebaseOnto(parent, oldBase, l.Branch); err != nil {
+			return err
+		}
+		if res.Branches[l.Branch], err = e.Git.BranchSHA(l.Branch); err != nil {
+			return err
+		}
+	}
+	if len(res.Restacked) > 0 {
 		res.Action = dry("restacked", o.dryRun)
 		if !o.dryRun {
-			if err := e.Git.RestackOnto(res.Upstream, res.Top); err != nil {
+			if err := e.Git.Checkout(current); err != nil {
 				return err
 			}
 		}
 	}
-	for _, l := range open {
-		sha, err := e.Git.BranchSHA(l.Branch)
-		if err != nil {
-			return err
-		}
-		res.Branches[l.Branch] = sha
-	}
 	return e.emit(res, func(w io.Writer) {
-		fmt.Fprintf(w, "%s: %s onto %s\n", res.Action, res.Top, res.Upstream)
+		if len(res.Restacked) == 0 {
+			fmt.Fprintln(w, "unchanged: every layer sits on its parent")
+			return
+		}
+		fmt.Fprintf(w, "%s: %s\n", res.Action, strings.Join(res.Restacked, " "))
 	})
+}
+
+// parentOf is what layer i sits on: the branch or ref name, its local tip,
+// and the tip GitHub knows for it (empty for the base).
+func (e *env) parentOf(open []layer, i int) (string, string, string, error) {
+	if i == 0 {
+		sha, err := e.Git.RefSHA("refs/remotes/" + open[0].Parent)
+		return open[0].Parent, sha, "", err
+	}
+	below := open[i-1]
+	sha, err := e.Git.BranchSHA(below.Branch)
+	return below.Branch, sha, below.RemoteSHA, err
 }
 
 type pushResult struct {

@@ -199,13 +199,14 @@ func (f *fakeGitHub) List(_ context.Context, owner, _ string, o *github.PullRequ
 
 // fakeGit is a commit graph (each commit knows its parent) plus refs.
 type fakeGit struct {
-	branch   string
-	err      error
-	parents  map[string]string // sha -> parent sha
-	refs     map[string]string // "refs/heads/x", "refs/remotes/origin/x" -> sha
-	restacks []string
-	pushes   []string
-	failOp   map[string]error
+	branch    string
+	err       error
+	parents   map[string]string // sha -> parent sha
+	refs      map[string]string // "refs/heads/x", "refs/remotes/origin/x" -> sha
+	restacks  []string
+	pushes    []string
+	checkouts []string
+	failOp    map[string]error
 }
 
 func (g *fakeGit) CurrentBranch() (string, error) { return g.branch, g.err }
@@ -236,9 +237,37 @@ func (g *fakeGit) IsAncestor(a, b string) bool {
 // commit adds sha on top of parent ("" for a root).
 func (g *fakeGit) commit(sha, parent string) { g.parents[sha] = parent }
 
-func (g *fakeGit) RestackOnto(upstream, top string) error {
-	g.restacks = append(g.restacks, upstream+" "+top)
-	return g.failOp["RestackOnto"]
+// RebaseOnto moves branch to a new commit sitting on onto's tip.
+func (g *fakeGit) RebaseOnto(onto, oldBase, branch string) error {
+	g.restacks = append(g.restacks, onto+" "+oldBase+" "+branch)
+	if err := g.failOp["RebaseOnto"]; err != nil {
+		return err
+	}
+	tip := g.refs["refs/heads/"+onto]
+	if tip == "" {
+		tip = g.refs["refs/remotes/"+onto]
+	}
+	moved := g.refs["refs/heads/"+branch] + "'"
+	g.commit(moved, tip)
+	g.refs["refs/heads/"+branch] = moved
+	return nil
+}
+
+func (g *fakeGit) MergeBase(a, b string) (string, error) {
+	if err := g.failOp["MergeBase"]; err != nil {
+		return "", err
+	}
+	for x, ok := a, true; ok && x != ""; x, ok = g.parents[x] {
+		if g.IsAncestor(x, b) {
+			return x, nil
+		}
+	}
+	return "", nil
+}
+
+func (g *fakeGit) Checkout(branch string) error {
+	g.checkouts = append(g.checkouts, branch)
+	return g.failOp["Checkout"]
 }
 
 func (g *fakeGit) Push(remote string, branches []string) error {

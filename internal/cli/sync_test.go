@@ -114,32 +114,71 @@ func TestStatusErrors(t *testing.T) {
 	}
 }
 
-func TestRestackRebasesTheTopOntoTheBase(t *testing.T) {
+func TestRestackLeavesASyncedStackAlone(t *testing.T) {
 	h := synced()
-	if code := h.run("restack"); code != ExitOK || h.out.String() != "unchanged: b3 onto origin/main\n" || len(h.git.restacks) != 0 {
+	if code := h.run("restack"); code != ExitOK || h.out.String() != "unchanged: every layer sits on its parent\n" || len(h.git.restacks) != 0 || len(h.git.checkouts) != 0 {
 		t.Fatalf("out=%q restacks=%v", h.out.String(), h.git.restacks)
 	}
-	h.git.commit("m1", "m0") // main moved
+}
+
+func TestRestackCarriesAMovedBaseThroughEveryLayer(t *testing.T) {
+	h := synced()
+	h.git.commit("m1", "m0")
 	h.git.refs["refs/remotes/origin/main"] = "m1"
-	if code := h.run("restack", "--dry-run"); code != ExitOK || h.out.String() != "would-restacked: b3 onto origin/main\n" || len(h.git.restacks) != 0 {
-		t.Fatalf("out=%q", h.out.String())
+	if code := h.run("restack", "--json"); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
-	if code := h.run("restack", "--json"); code != ExitOK || len(h.git.restacks) != 1 || h.git.restacks[0] != "origin/main b3" {
-		t.Fatalf("restacks=%v err=%q", h.git.restacks, h.err.String())
+	want := []string{"origin/main m0 b1", "b1 sha-b1 b2", "b2 sha-b2 b3"}
+	if strings.Join(h.git.restacks, "|") != strings.Join(want, "|") {
+		t.Fatalf("restacks=%v", h.git.restacks)
+	}
+	if !h.git.IsAncestor("m1", h.git.refs["refs/heads/b3"]) || h.git.checkouts[0] != "b2" {
+		t.Fatalf("b3 not on m1, or not back on b2: %v", h.git.checkouts)
 	}
 	var r restackResult
-	if err := json.Unmarshal(h.out.Bytes(), &r); err != nil || r.Action != "restacked" || r.Branches["b2"] != "sha-b2" {
+	if err := json.Unmarshal(h.out.Bytes(), &r); err != nil || r.Action != "restacked" || len(r.Restacked) != 3 || r.Branches["b1"] != "sha-b1'" {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
 
-func TestRestackStartsAboveMergedLayers(t *testing.T) {
+func TestRestackCarriesAFixedMiddleLayerUp(t *testing.T) {
+	h := synced()
+	h.git.commit("fix2", "sha-b2") // b2 gained a commit GitHub has not seen
+	h.git.refs["refs/heads/b2"] = "fix2"
+	if code := h.run("restack"); code != ExitOK || h.out.String() != "restacked: b3\n" {
+		t.Fatalf("out=%q err=%q", h.out.String(), h.err.String())
+	}
+	if h.git.restacks[0] != "b2 sha-b2 b3" || !h.git.IsAncestor("fix2", h.git.refs["refs/heads/b3"]) {
+		t.Fatalf("restacks=%v", h.git.restacks)
+	}
+}
+
+func TestRestackFallsBackToTheMergeBase(t *testing.T) {
+	h := synced()
+	h.gh.stacks[65].PullRequests[0].Head.SHA = "never-fetched"
+	h.git.commit("fix1", "sha-b1")
+	h.git.refs["refs/heads/b1"] = "fix1"
+	if code := h.run("restack"); code != ExitOK || h.git.restacks[0] != "b1 sha-b1 b2" {
+		t.Fatalf("restacks=%v err=%q", h.git.restacks, h.err.String())
+	}
+}
+
+func TestRestackDryRunMarksEverythingAboveAMove(t *testing.T) {
+	h := synced()
+	h.git.commit("fix1", "sha-b1")
+	h.git.refs["refs/heads/b1"] = "fix1"
+	if code := h.run("restack", "--dry-run"); code != ExitOK || h.out.String() != "would-restacked: b2 b3\n" || len(h.git.restacks) != 0 {
+		t.Fatalf("out=%q restacks=%v", h.out.String(), h.git.restacks)
+	}
+}
+
+func TestRestackSkipsMergedLayers(t *testing.T) {
 	h := synced()
 	h.gh.stacks[65].PullRequests[0].MergedAt = &github.Timestamp{}
 	h.gh.stacks[65].PullRequests[0].State = "closed"
 	h.git.commit("m1", "sha-b1") // b1 merged into main
 	h.git.refs["refs/remotes/origin/main"] = "m1"
-	if code := h.run("restack"); code != ExitOK || h.git.restacks[0] != "origin/main b3" {
+	if code := h.run("restack"); code != ExitOK || h.git.restacks[0] != "origin/main sha-b1 b2" {
 		t.Fatalf("restacks=%v err=%q", h.git.restacks, h.err.String())
 	}
 }
@@ -157,15 +196,27 @@ func TestRestackErrors(t *testing.T) {
 	if code := h.run("restack"); code != ExitNotFound || !strings.Contains(h.err.String(), "b3 (#3) is not checked out") {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
-	h = synced()
-	h.git.commit("m1", "m0")
-	h.git.refs["refs/remotes/origin/main"] = "m1"
-	h.git.failOp["RestackOnto"] = errors.New("conflict in b2")
-	if code := h.run("restack"); code != ExitError || !strings.Contains(h.err.String(), "conflict in b2") {
-		t.Fatalf("code=%d err=%q", code, h.err.String())
-	}
 	if code := h.run("restack", "99"); code != ExitNotFound {
 		t.Fatalf("code=%d", code)
+	}
+	moved := func() *harness {
+		h := synced()
+		h.git.commit("m1", "m0")
+		h.git.refs["refs/remotes/origin/main"] = "m1"
+		return h
+	}
+	for op, code := range map[string]int{"RebaseOnto": ExitError, "Checkout": ExitError, "MergeBase": ExitError} {
+		h = moved()
+		h.git.failOp[op] = errors.New(op + " broke")
+		if op == "MergeBase" {
+			h.gh.stacks[65].PullRequests[0].Head.SHA = "never-fetched"
+			h.git.commit("fix1", "sha-b1")
+			h.git.refs["refs/heads/b1"] = "fix1"
+			h.git.refs["refs/remotes/origin/main"] = "m0"
+		}
+		if got := h.run("restack"); got != code || !strings.Contains(h.err.String(), op+" broke") {
+			t.Errorf("%s: code=%d err=%q", op, got, h.err.String())
+		}
 	}
 	h = synced()
 	h.git.failOp["RefSHA"] = errors.New("git broke")
@@ -174,10 +225,16 @@ func TestRestackErrors(t *testing.T) {
 	}
 }
 
-func TestRestackReportsBranchReadErrors(t *testing.T) {
+func TestRestackReportsGitReadErrors(t *testing.T) {
 	h := synced()
 	h.git.failOp["BranchSHA"] = errors.New("git broke")
 	if code := h.run("restack"); code != ExitError {
+		t.Fatalf("code=%d", code)
+	}
+	h = synced()
+	h.git.err = errors.New("detached")
+	h.git.branch = ""
+	if code := h.run("restack", "65"); code != ExitError {
 		t.Fatalf("code=%d", code)
 	}
 }

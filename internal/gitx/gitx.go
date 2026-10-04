@@ -50,9 +50,20 @@ func (r Repo) IsAncestor(a, b string) bool {
 	return err == nil
 }
 
-// RestackOnto rebases top onto upstream, moving every branch on the way.
-func (r Repo) RestackOnto(upstream, top string) error {
-	_, err := r.git("rebase", "--update-refs", upstream, top)
+// RebaseOnto replays branch's commits after oldBase onto onto.
+func (r Repo) RebaseOnto(onto, oldBase, branch string) error {
+	_, err := r.git("rebase", "--onto", onto, oldBase, branch)
+	return err
+}
+
+// MergeBase returns the best common ancestor of a and b.
+func (r Repo) MergeBase(a, b string) (string, error) {
+	return r.git("merge-base", a, b)
+}
+
+// Checkout switches to branch.
+func (r Repo) Checkout(branch string) error {
+	_, err := r.git("checkout", "-q", branch)
 	return err
 }
 

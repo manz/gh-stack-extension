@@ -34,7 +34,9 @@ type Git interface {
 	RefSHA(ref string) (string, error)
 	HasCommit(sha string) bool
 	IsAncestor(a, b string) bool
-	RestackOnto(upstream, top string) error
+	RebaseOnto(onto, oldBase, branch string) error
+	MergeBase(a, b string) (string, error)
+	Checkout(branch string) error
 	Push(remote string, branches []string) error
 	FirstCommitMessage(upstream, branch string) (subject, body string, err error)
 }
