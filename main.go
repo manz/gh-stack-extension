@@ -2,38 +2,46 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+	"github.com/cli/go-gh/v2/pkg/repository"
+	"github.com/manz/gh-stack-extension/internal/cli"
+	"github.com/manz/gh-stack-extension/internal/gitx"
+	"github.com/manz/gh-stack-extension/internal/stackapi"
 )
 
-// restClient is the part of go-gh's REST client the commands use.
-type restClient interface {
-	Get(path string, response interface{}) error
-}
-
-func newRESTClient() (restClient, error) {
-	return api.DefaultRESTClient()
-}
-
 func main() {
-	os.Exit(run(os.Stdout, os.Stderr, newRESTClient))
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, api.DefaultHTTPClient))
 }
 
-// run prints who the extension runs as and returns the process exit code.
-func run(stdout, stderr io.Writer, newClient func() (restClient, error)) int {
-	client, err := newClient()
+func run(args []string, stdout, stderr io.Writer, httpClient func() (*http.Client, error)) int {
+	hc, err := httpClient()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return cli.ExitError
 	}
-	var user struct{ Login string }
-	if err := client.Get("user", &user); err != nil {
+	gh, err := stackapi.NewGitHub(hc)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return cli.ExitError
 	}
-	fmt.Fprintf(stdout, "running as %s\n", user.Login)
-	return 0
+	return cli.Run(context.Background(), args, cli.Deps{
+		Out: stdout, Err: stderr, PRs: gh.PullRequests, Git: gitx.Repo{}, Repo: resolveRepo,
+	})
+}
+
+// resolveRepo returns --repo when given, else the current repository.
+func resolveRepo(override string) (owner, name string, err error) {
+	var r repository.Repository
+	if override != "" {
+		r, err = repository.Parse(override)
+	} else {
+		r, err = repository.Current()
+	}
+	return r.Owner, r.Name, err
 }
