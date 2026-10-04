@@ -12,6 +12,9 @@ func newRepo(t *testing.T) Repo {
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
+		// CI runners have no git identity; restacking commits needs one.
+		{"config", "user.name", "t"},
+		{"config", "user.email", "t@t"},
 		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"},
 	} {
 		cmd := exec.Command("git", args...)
