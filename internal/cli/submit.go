@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	register("submit", command{usage: "push BRANCH... (bottom first, default: the current stack), open or fix their pull requests, link the stack", setup: submitFlags})
+	register("submit", command{usage: "push BRANCH... (bottom first; default: the branches between the trunk and HEAD), open or fix their pull requests, link the stack", setup: submitFlags})
 }
 
 type submitOpts struct {
@@ -26,7 +26,7 @@ type submitOpts struct {
 
 func submitFlags(fs *flag.FlagSet) func(*env, []string) error {
 	o := submitOpts{messages: map[string]string{}}
-	fs.StringVar(&o.base, "base", "", "branch the bottom pull request targets (default: its current base)")
+	fs.StringVar(&o.base, "base", "", "branch the bottom pull request targets (default: its current base, else the remote's default branch)")
 	fs.StringVar(&o.remote, "remote", "origin", "git remote to push to")
 	fs.BoolVar(&o.draft, "draft", false, "open new pull requests as drafts")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would change, change nothing")

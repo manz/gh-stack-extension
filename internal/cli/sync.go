@@ -12,7 +12,7 @@ import (
 
 func init() {
 	register("status", command{usage: "compare local branches with the stack: STACK, --pr N, or the current branch's", setup: stackFlags(runStatus)})
-	register("restack", command{usage: "rebase the stack's branches onto its base in one pass", setup: stackFlags(runRestack)})
+	register("restack", command{usage: "replay each layer onto its parent, bottom up", setup: stackFlags(runRestack)})
 	register("push", command{usage: "push the stack's branches that differ from GitHub", setup: stackFlags(runPush)})
 }
 
