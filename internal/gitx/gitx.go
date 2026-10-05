@@ -5,13 +5,27 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
+
+	"github.com/cli/safeexec"
 )
 
 // Repo is a git working tree; Dir empty means the current directory.
 type Repo struct{ Dir string }
 
+const forEachRef = "for-each-ref"
+
+// gitPath is git's absolute path, looked up once. safeexec (as gh uses)
+// never resolves to the current directory, and running an absolute path
+// keeps the lookup out of every call.
+var gitPath = sync.OnceValues(func() (string, error) { return safeexec.LookPath("git") })
+
 func (r Repo) git(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	path, err := gitPath()
+	if err != nil {
+		return "", fmt.Errorf("git not found: %w", err)
+	}
+	cmd := exec.Command(path, args...)
 	cmd.Dir = r.Dir
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
@@ -28,13 +42,13 @@ func (r Repo) CurrentBranch() (string, error) {
 
 // BranchSHA returns a local branch's commit, or "" if the branch is missing.
 func (r Repo) BranchSHA(branch string) (string, error) {
-	out, err := r.git("for-each-ref", "--format=%(objectname)", "refs/heads/"+branch)
+	out, err := r.git(forEachRef, "--format=%(objectname)", "refs/heads/"+branch)
 	return out, err
 }
 
 // RefSHA returns any ref's commit, or "" if it does not exist.
 func (r Repo) RefSHA(ref string) (string, error) {
-	out, err := r.git("for-each-ref", "--format=%(objectname)", ref)
+	out, err := r.git(forEachRef, "--format=%(objectname)", ref)
 	return out, err
 }
 
@@ -93,7 +107,7 @@ func (r Repo) FirstCommitMessage(upstream, branch string) (subject, body string,
 
 // LocalBranches maps every local branch to its commit.
 func (r Repo) LocalBranches() (map[string]string, error) {
-	out, err := r.git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads")
+	out, err := r.git(forEachRef, "--format=%(refname:short) %(objectname)", "refs/heads")
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -22,13 +23,13 @@ type stackOpts struct {
 	dryRun bool
 }
 
-func stackFlags(run func(e *env, args []string, o stackOpts) error) func(*flag.FlagSet) func(*env, []string) error {
-	return func(fs *flag.FlagSet) func(*env, []string) error {
+func stackFlags(run func(ctx context.Context, e *env, args []string, o stackOpts) error) func(*flag.FlagSet) func(context.Context, *env, []string) error {
+	return func(fs *flag.FlagSet) func(context.Context, *env, []string) error {
 		pr := fs.Int("pr", 0, "the stack containing this pull request")
 		remote := fs.String("remote", "origin", "git remote the branches live on")
 		dry := fs.Bool("dry-run", false, "print what would change, change nothing")
-		return func(e *env, args []string) error {
-			return run(e, args, stackOpts{pr: *pr, remote: *remote, dryRun: *dry})
+		return func(ctx context.Context, e *env, args []string) error {
+			return run(ctx, e, args, stackOpts{pr: *pr, remote: *remote, dryRun: *dry})
 		}
 	}
 }
@@ -61,12 +62,12 @@ type statusResult struct {
 	Layers []layer `json:"layers"`
 }
 
-func (e *env) loadStack(args []string, o stackOpts) (*github.PullRequestStackDetails, error) {
-	number, err := e.stackNumber(args, o.pr)
+func (e *env) loadStack(ctx context.Context, args []string, o stackOpts) (*github.PullRequestStackDetails, error) {
+	number, err := e.stackNumber(ctx, args, o.pr)
 	if err != nil {
 		return nil, err
 	}
-	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, number)
+	s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, number)
 	return s, stackapi.Classify(err)
 }
 
@@ -120,8 +121,8 @@ func (e *env) syncState(local, remote string) string {
 	return syncDiverged
 }
 
-func runStatus(e *env, args []string, o stackOpts) error {
-	s, err := e.loadStack(args, o)
+func runStatus(ctx context.Context, e *env, args []string, o stackOpts) error {
+	s, err := e.loadStack(ctx, args, o)
 	if err != nil {
 		return err
 	}
@@ -158,8 +159,8 @@ type restackResult struct {
 // not in its history gets its own commits replayed onto the parent: the old
 // parent tip is GitHub's head of the layer below (what it was built on), or
 // the merge-base for the bottom layer. Fixing a middle layer so carries up.
-func runRestack(e *env, args []string, o stackOpts) error {
-	open, err := e.openLayers(args, o)
+func runRestack(ctx context.Context, e *env, args []string, o stackOpts) error {
+	open, err := e.openLayers(ctx, args, o)
 	if err != nil {
 		return err
 	}
@@ -194,8 +195,8 @@ func runRestack(e *env, args []string, o stackOpts) error {
 }
 
 // openLayers is the stack's open layers, all checked out locally.
-func (e *env) openLayers(args []string, o stackOpts) ([]layer, error) {
-	s, err := e.loadStack(args, o)
+func (e *env) openLayers(ctx context.Context, args []string, o stackOpts) ([]layer, error) {
+	s, err := e.loadStack(ctx, args, o)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +271,8 @@ type pushResult struct {
 	Branches []string `json:"branches"`
 }
 
-func runPush(e *env, args []string, o stackOpts) error {
-	s, err := e.loadStack(args, o)
+func runPush(ctx context.Context, e *env, args []string, o stackOpts) error {
+	s, err := e.loadStack(ctx, args, o)
 	if err != nil {
 		return err
 	}

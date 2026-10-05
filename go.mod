@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/cli/go-gh/v2 v2.16.1
+	github.com/cli/safeexec v1.0.1
 	github.com/google/go-github/v92 v92.0.0
 )
 
@@ -11,7 +12,6 @@ require (
 	codeberg.org/chavacava/garif v0.2.1 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
-	github.com/cli/safeexec v1.0.1 // indirect
 	github.com/cli/shurcooL-graphql v0.0.4 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect

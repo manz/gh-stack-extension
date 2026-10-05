@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -17,10 +18,10 @@ func init() {
 	register("adopt", command{usage: "stack the pull requests chained by base branch around PR or BRANCH (default: current branch)", setup: withDryRun(runAdopt)})
 }
 
-func withDryRun(run func(e *env, args []string, dryRun bool) error) func(*flag.FlagSet) func(*env, []string) error {
-	return func(fs *flag.FlagSet) func(*env, []string) error {
+func withDryRun(run func(ctx context.Context, e *env, args []string, dryRun bool) error) func(*flag.FlagSet) func(context.Context, *env, []string) error {
+	return func(fs *flag.FlagSet) func(context.Context, *env, []string) error {
 		dry := fs.Bool("dry-run", false, "print what would change, change nothing")
-		return func(e *env, args []string) error { return run(e, args, *dry) }
+		return func(ctx context.Context, e *env, args []string) error { return run(ctx, e, args, *dry) }
 	}
 }
 
@@ -64,7 +65,7 @@ func parsePRs(args []string) ([]int, error) {
 	return prs, nil
 }
 
-func runCreate(e *env, args []string, dryRun bool) error {
+func runCreate(ctx context.Context, e *env, args []string, dryRun bool) error {
 	prs, err := parsePRs(args)
 	if err != nil {
 		return err
@@ -72,11 +73,11 @@ func runCreate(e *env, args []string, dryRun bool) error {
 	if len(prs) < 2 {
 		return usagef("a stack needs at least two pull requests")
 	}
-	return e.linkAndReport(prs, dryRun)
+	return e.linkAndReport(ctx, prs, dryRun)
 }
 
-func (e *env) linkAndReport(prs []int, dryRun bool) error {
-	res, err := e.link(prs, dryRun)
+func (e *env) linkAndReport(ctx context.Context, prs []int, dryRun bool) error {
+	res, err := e.link(ctx, prs, dryRun)
 	if err != nil {
 		return err
 	}
@@ -84,9 +85,9 @@ func (e *env) linkAndReport(prs []int, dryRun bool) error {
 }
 
 // link makes prs (bottom first) one stack, doing only what is missing.
-func (e *env) link(prs []int, dryRun bool) (linkResult, error) {
+func (e *env) link(ctx context.Context, prs []int, dryRun bool) (linkResult, error) {
 	res := linkResult{PullRequests: prs}
-	existing, err := e.stackHolding(prs[0])
+	existing, err := e.stackHolding(ctx, prs[0])
 	if err != nil {
 		return res, err
 	}
@@ -105,7 +106,7 @@ func (e *env) link(prs []int, dryRun bool) (linkResult, error) {
 		if dryRun {
 			return res, nil
 		}
-		s, _, err := e.PRs.AddToStack(e.ctx, e.owner, e.repo, existing.Number, github.PullRequestAddToStackRequest{PullRequests: res.Added})
+		s, _, err := e.PRs.AddToStack(ctx, e.owner, e.repo, existing.Number, github.PullRequestAddToStackRequest{PullRequests: res.Added})
 		res.Stack = s
 		return res, stackapi.Classify(err)
 	}
@@ -113,21 +114,21 @@ func (e *env) link(prs []int, dryRun bool) (linkResult, error) {
 	if dryRun {
 		return res, nil
 	}
-	s, _, err := e.PRs.CreateStack(e.ctx, e.owner, e.repo, github.PullRequestCreateStackRequest{PullRequests: prs})
+	s, _, err := e.PRs.CreateStack(ctx, e.owner, e.repo, github.PullRequestCreateStackRequest{PullRequests: prs})
 	res.Stack = s
 	return res, stackapi.Classify(err)
 }
 
 // stackHolding returns the stack a pull request is in, or nil.
-func (e *env) stackHolding(pr int) (*github.PullRequestStackDetails, error) {
-	p, _, err := e.PRs.Get(e.ctx, e.owner, e.repo, pr)
+func (e *env) stackHolding(ctx context.Context, pr int) (*github.PullRequestStackDetails, error) {
+	p, _, err := e.PRs.Get(ctx, e.owner, e.repo, pr)
 	if err != nil {
 		return nil, stackapi.Classify(err)
 	}
 	if p.Stack == nil || p.Stack.Number == nil {
 		return nil, nil
 	}
-	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *p.Stack.Number)
+	s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, *p.Stack.Number)
 	return s, stackapi.Classify(err)
 }
 
@@ -179,7 +180,7 @@ func stackArg(args []string) (int, []string, error) {
 	return n, args[1:], nil
 }
 
-func runAdd(e *env, args []string, dryRun bool) error {
+func runAdd(ctx context.Context, e *env, args []string, dryRun bool) error {
 	number, rest, err := stackArg(args)
 	if err != nil {
 		return err
@@ -191,12 +192,12 @@ func runAdd(e *env, args []string, dryRun bool) error {
 	if len(prs) == 0 {
 		return usagef("missing pull requests to add")
 	}
-	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, number)
+	s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, number)
 	if err != nil {
 		return stackapi.Classify(err)
 	}
 	have := openNumbers(s)
-	return e.linkAndReport(append(have, withoutTop(have, prs)...), dryRun)
+	return e.linkAndReport(ctx, append(have, withoutTop(have, prs)...), dryRun)
 }
 
 // withoutTop drops the leading prs that already sit at the top of have, so
@@ -216,7 +217,7 @@ type unstackResult struct {
 	PullRequests []int  `json:"pull_requests"`
 }
 
-func runUnstack(e *env, args []string, dryRun bool) error {
+func runUnstack(ctx context.Context, e *env, args []string, dryRun bool) error {
 	number, rest, err := stackArg(args)
 	if err != nil {
 		return err
@@ -224,13 +225,13 @@ func runUnstack(e *env, args []string, dryRun bool) error {
 	if len(rest) != 0 {
 		return usagef("unstack takes one stack number")
 	}
-	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, number)
+	s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, number)
 	if err != nil {
 		return stackapi.Classify(err)
 	}
 	res := unstackResult{Action: dry(actionUnstacked, dryRun), Stack: number, PullRequests: detailNumbers(s)}
 	if !dryRun {
-		if _, _, err := e.PRs.Unstack(e.ctx, e.owner, e.repo, number); err != nil {
+		if _, _, err := e.PRs.Unstack(ctx, e.owner, e.repo, number); err != nil {
 			return stackapi.Classify(err)
 		}
 	}
@@ -239,29 +240,29 @@ func runUnstack(e *env, args []string, dryRun bool) error {
 	})
 }
 
-func runAdopt(e *env, args []string, dryRun bool) error {
+func runAdopt(ctx context.Context, e *env, args []string, dryRun bool) error {
 	if len(args) > 1 {
 		return usagef("adopt takes one pull request or branch")
 	}
-	start, err := e.adoptStart(args)
+	start, err := e.adoptStart(ctx, args)
 	if err != nil {
 		return err
 	}
-	chain, err := e.chainAround(start)
+	chain, err := e.chainAround(ctx, start)
 	if err != nil {
 		return err
 	}
 	if len(chain) < 2 {
 		return fmt.Errorf("%w: #%d has no pull request below or above it to stack with", stackapi.ErrValidation, start.GetNumber())
 	}
-	return e.linkAndReport(chain, dryRun)
+	return e.linkAndReport(ctx, chain, dryRun)
 }
 
 // adoptStart resolves a pull request number, a branch, or the current branch.
-func (e *env) adoptStart(args []string) (*github.PullRequest, error) {
+func (e *env) adoptStart(ctx context.Context, args []string) (*github.PullRequest, error) {
 	if len(args) == 1 {
 		if n, err := strconv.Atoi(args[0]); err == nil {
-			p, _, err := e.PRs.Get(e.ctx, e.owner, e.repo, n)
+			p, _, err := e.PRs.Get(ctx, e.owner, e.repo, n)
 			return p, stackapi.Classify(err)
 		}
 	}
@@ -275,7 +276,7 @@ func (e *env) adoptStart(args []string) (*github.PullRequest, error) {
 		}
 		branch = b
 	}
-	p, err := e.openPRForHead(branch)
+	p, err := e.openPRForHead(ctx, branch)
 	if err != nil {
 		return nil, err
 	}
@@ -287,10 +288,10 @@ func (e *env) adoptStart(args []string) (*github.PullRequest, error) {
 
 // chainAround follows base branches down and child pull requests up from p,
 // returning the chain bottom first.
-func (e *env) chainAround(p *github.PullRequest) ([]int, error) {
+func (e *env) chainAround(ctx context.Context, p *github.PullRequest) ([]int, error) {
 	var below []int
 	for cur := p; ; {
-		parent, err := e.openPRForHead(cur.GetBase().GetRef())
+		parent, err := e.openPRForHead(ctx, cur.GetBase().GetRef())
 		if err != nil {
 			return nil, err
 		}
@@ -302,7 +303,7 @@ func (e *env) chainAround(p *github.PullRequest) ([]int, error) {
 	}
 	chain := append(below, p.GetNumber())
 	for cur := p; ; {
-		kids, _, err := e.PRs.List(e.ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "open", Base: cur.GetHead().GetRef()})
+		kids, _, err := e.PRs.List(ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "open", Base: cur.GetHead().GetRef()})
 		if err != nil {
 			return nil, stackapi.Classify(err)
 		}
