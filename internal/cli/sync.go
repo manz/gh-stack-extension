@@ -13,7 +13,6 @@ import (
 
 func init() {
 	register("status", command{usage: "compare local branches with the stack: STACK, --pr N, or the current branch's", setup: stackFlags(runStatus)})
-	register("restack", command{usage: "replay each layer onto its parent, bottom up", setup: stackFlags(runRestack)})
 	register("push", command{usage: "push the stack's branches that differ from GitHub", setup: stackFlags(runPush)})
 }
 
@@ -149,51 +148,6 @@ func runStatus(ctx context.Context, e *env, args []string, o stackOpts) error {
 	})
 }
 
-type restackResult struct {
-	Action    string            `json:"action"`
-	Restacked []string          `json:"restacked"` // bottom first
-	Branches  map[string]string `json:"branches"`  // branch -> local sha after
-}
-
-// runRestack walks the open layers bottom up. A layer whose parent's tip is
-// not in its history gets its own commits replayed onto the parent: the old
-// parent tip is GitHub's head of the layer below (what it was built on), or
-// the merge-base for the bottom layer. Fixing a middle layer so carries up.
-func runRestack(ctx context.Context, e *env, args []string, o stackOpts) error {
-	open, err := e.openLayers(ctx, args, o)
-	if err != nil {
-		return err
-	}
-	current, err := e.Git.CurrentBranch()
-	if err != nil {
-		return err
-	}
-	res := restackResult{Action: actionUnchanged, Restacked: []string{}, Branches: map[string]string{}}
-	moving := false // under --dry-run, everything above a moved layer moves too
-	for i, l := range open {
-		moved, err := e.restackLayer(open, i, moving, o.dryRun)
-		if err != nil {
-			return err
-		}
-		if moved {
-			res.Restacked = append(res.Restacked, l.Branch)
-			moving = o.dryRun
-		}
-		if res.Branches[l.Branch], err = e.Git.BranchSHA(l.Branch); err != nil {
-			return err
-		}
-	}
-	if len(res.Restacked) > 0 {
-		res.Action = dry("restacked", o.dryRun)
-		if !o.dryRun {
-			if err := e.Git.Checkout(current); err != nil {
-				return err
-			}
-		}
-	}
-	return e.emit(res, func(w io.Writer) { printRestack(w, res) })
-}
-
 // openLayers is the stack's open layers, all checked out locally.
 func (e *env) openLayers(ctx context.Context, args []string, o stackOpts) ([]layer, error) {
 	s, err := e.loadStack(ctx, args, o)
@@ -218,39 +172,6 @@ func (e *env) openLayers(ctx context.Context, args []string, o stackOpts) ([]lay
 		return nil, fmt.Errorf("%w: stack %d has no open pull requests", stackapi.ErrValidation, s.Number)
 	}
 	return open, nil
-}
-
-// restackLayer replays layer i onto its parent when the parent's tip is not
-// in its history (or, under --dry-run, when a layer below would move).
-func (e *env) restackLayer(open []layer, i int, moving, dryRun bool) (bool, error) {
-	parent, parentSHA, oldBase, err := e.parentOf(open, i)
-	if err != nil {
-		return false, err
-	}
-	local, err := e.Git.BranchSHA(open[i].Branch)
-	if err != nil {
-		return false, err
-	}
-	if !moving && (parentSHA == "" || e.Git.IsAncestor(parentSHA, local)) {
-		return false, nil
-	}
-	if dryRun {
-		return true, nil
-	}
-	if oldBase == "" || !e.Git.HasCommit(oldBase) || !e.Git.IsAncestor(oldBase, local) {
-		if oldBase, err = e.Git.MergeBase(parentSHA, local); err != nil {
-			return false, err
-		}
-	}
-	return true, e.Git.RebaseOnto(parent, oldBase, open[i].Branch)
-}
-
-func printRestack(w io.Writer, res restackResult) {
-	if len(res.Restacked) == 0 {
-		fmt.Fprintln(w, "unchanged: every layer sits on its parent")
-		return
-	}
-	fmt.Fprintf(w, "%s: %s\n", res.Action, strings.Join(res.Restacked, " "))
 }
 
 // parentOf is what layer i sits on: the branch or ref name, its local tip,

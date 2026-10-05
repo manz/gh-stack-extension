@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -211,6 +213,10 @@ type fakeGit struct {
 	pushes    []string
 	checkouts []string
 	emptyBody bool // commits carry a subject only
+	gitDir    string
+	conflicts map[string]bool // branches whose rebase stops on a conflict
+	pending   *[2]string      // onto, branch of a stopped rebase
+	setRefs   []string
 	failOp    map[string]error
 }
 
@@ -242,12 +248,22 @@ func (g *fakeGit) IsAncestor(a, b string) bool {
 // commit adds sha on top of parent ("" for a root).
 func (g *fakeGit) commit(sha, parent string) { g.parents[sha] = parent }
 
-// RebaseOnto moves branch to a new commit sitting on onto's tip.
+// RebaseOnto moves branch to a new commit sitting on onto's tip, or stops
+// on a conflict for a branch in g.conflicts.
 func (g *fakeGit) RebaseOnto(onto, oldBase, branch string) error {
 	g.restacks = append(g.restacks, onto+" "+oldBase+" "+branch)
 	if err := g.failOp["RebaseOnto"]; err != nil {
 		return err
 	}
+	if g.conflicts[branch] {
+		g.pending = &[2]string{onto, branch}
+		return errors.New("CONFLICT (content): merge conflict in f")
+	}
+	g.move(onto, branch)
+	return nil
+}
+
+func (g *fakeGit) move(onto, branch string) {
 	tip := g.refs["refs/heads/"+onto]
 	if tip == "" {
 		tip = g.refs["refs/remotes/"+onto]
@@ -255,6 +271,44 @@ func (g *fakeGit) RebaseOnto(onto, oldBase, branch string) error {
 	moved := g.refs["refs/heads/"+branch] + "'"
 	g.commit(moved, tip)
 	g.refs["refs/heads/"+branch] = moved
+}
+
+func (g *fakeGit) GitPath(name string) (string, error) {
+	if err := g.failOp["GitPath"]; err != nil {
+		return "", err
+	}
+	return filepath.Join(g.gitDir, name), nil
+}
+
+func (g *fakeGit) RebaseInProgress() bool { return g.pending != nil }
+
+func (g *fakeGit) RebaseContinue() error {
+	if err := g.failOp["RebaseContinue"]; err != nil {
+		return err
+	}
+	if g.pending == nil {
+		return errors.New("no rebase in progress")
+	}
+	g.move(g.pending[0], g.pending[1])
+	delete(g.conflicts, g.pending[1])
+	g.pending = nil
+	return nil
+}
+
+func (g *fakeGit) RebaseAbort() error {
+	if err := g.failOp["RebaseAbort"]; err != nil {
+		return err
+	}
+	g.pending = nil
+	return nil
+}
+
+func (g *fakeGit) SetBranch(branch, sha string) error {
+	if err := g.failOp["SetBranch"]; err != nil {
+		return err
+	}
+	g.setRefs = append(g.setRefs, branch)
+	g.refs["refs/heads/"+branch] = sha
 	return nil
 }
 
@@ -291,7 +345,12 @@ type harness struct {
 func (h *harness) sleep(d time.Duration) { h.slept = append(h.slept, d) }
 
 func newHarness() *harness {
-	return &harness{gh: newFake(), git: &fakeGit{branch: "main", parents: map[string]string{}, refs: map[string]string{}, failOp: map[string]error{}}}
+	dir, err := os.MkdirTemp("", "gse-git")
+	if err != nil {
+		panic(err)
+	}
+	return &harness{gh: newFake(), git: &fakeGit{branch: "main", parents: map[string]string{}, refs: map[string]string{}, failOp: map[string]error{},
+		gitDir: dir, conflicts: map[string]bool{}}}
 }
 
 func (h *harness) run(args ...string) int {

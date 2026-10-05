@@ -24,6 +24,15 @@ local state to drift.
 gh extension install manz/gh-stack-extension
 ```
 
+### Agent skill
+
+[`skills/gh-stack-extension`](skills/gh-stack-extension/SKILL.md) teaches a
+coding agent the loop, the rules and the exit codes. For Claude Code:
+
+```sh
+mkdir -p ~/.claude/skills && cp -r skills/gh-stack-extension ~/.claude/skills/
+```
+
 ## The loop
 
 ```sh
@@ -32,6 +41,7 @@ git commit                          # subject = PR title, body = PR description
 gh stack-extension submit           # push, open the PR on the branch below, link the stack
 gh stack-extension status           # each layer: in_sync, ahead, behind, diverged, missing
 gh stack-extension restack          # after a lower layer changed: replay each layer onto its parent
+                                    # on a conflict: fix it, git add, restack --continue (or --abort)
 gh stack-extension push             # push the branches that differ from GitHub
 gh stack-extension merge --wait     # merge the current PR and every layer below it
 ```
@@ -55,7 +65,7 @@ of the current directory). Flags can go before or after arguments.
 | `unstack STACK` | dissolve a stack; its pull requests stay open | `--dry-run` |
 | `adopt [PR\|BRANCH]` | stack the pull requests chained by base branch around one of them | `--dry-run` |
 | `status [STACK]` | local branches against the stack's heads on GitHub | `--pr`, `--remote` |
-| `restack [STACK]` | replay each layer onto its parent, bottom up | `--pr`, `--remote`, `--dry-run` |
+| `restack [STACK]` | replay each layer onto its parent, bottom up; a conflict stops it (exit 4) until `--continue` or `--abort` | `--pr`, `--remote`, `--dry-run`, `--continue`, `--abort` |
 | `push [STACK]` | push the branches that differ from GitHub (`--force-with-lease`) | `--pr`, `--remote`, `--dry-run` |
 | `submit [BRANCH...]` | push, open or retarget each pull request, link them | `--base`, `--remote`, `--draft`, `--message BRANCH=FILE`, `--dry-run` |
 | `merge [PR]` | merge or queue a pull request and every layer below it; a PR number needs `--repo` | `--method merge\|squash\|rebase`, `--queue`, `--direct`, `--wait`, `--interval`, `--timeout`, `--dry-run` |
@@ -87,7 +97,7 @@ them. The other commands print what they did:
 | 1 | error (git, network, unreadable file) |
 | 2 | wrong usage, or a refused request (no description, PR number without `--repo`) |
 | 3 | not found (stack, pull request, branch) |
-| 4 | conflict (merge already pending, branch behind GitHub, branch already merged) |
+| 4 | conflict (restack conflict, merge already pending, branch behind GitHub, branch already merged) |
 | 5 | validation failed (pull requests that do not chain, a fork, a PR in another stack) |
 | 6 | merge failed |
 

@@ -41,6 +41,11 @@ type Git interface {
 	FirstCommitMessage(upstream, branch string) (subject, body string, err error)
 	LocalBranches() (map[string]string, error)
 	DefaultBranch(remote string) (string, error)
+	GitPath(name string) (string, error)
+	RebaseInProgress() bool
+	RebaseContinue() error
+	RebaseAbort() error
+	SetBranch(branch, sha string) error
 }
 
 // Deps are the outside world: output streams, GitHub, git and the repository.
