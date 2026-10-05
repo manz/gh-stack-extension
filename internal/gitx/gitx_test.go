@@ -132,3 +132,27 @@ func TestFirstCommitMessage(t *testing.T) {
 		t.Fatal("expected an error for a missing branch")
 	}
 }
+
+func TestLocalBranchesAndDefaultBranch(t *testing.T) {
+	r, a, b := stacked(t)
+	branches, err := r.LocalBranches()
+	if err != nil || branches["a"] != a || branches["b"] != b || len(branches) != 3 {
+		t.Fatalf("%v %v", branches, err)
+	}
+	if _, err := r.DefaultBranch("origin"); err == nil {
+		t.Fatal("no remote HEAD yet")
+	}
+	remote := t.TempDir()
+	if _, err := (Repo{Dir: remote}).git("init", "-q", "--bare", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	r.must(t, "remote", "add", "origin", remote)
+	r.must(t, "push", "-q", "origin", "main")
+	r.must(t, "remote", "set-head", "origin", "main")
+	if d, err := r.DefaultBranch("origin"); err != nil || d != "main" {
+		t.Fatalf("default=%q err=%v", d, err)
+	}
+	if _, err := (Repo{Dir: t.TempDir()}).LocalBranches(); err == nil {
+		t.Fatal("expected an error outside a repository")
+	}
+}

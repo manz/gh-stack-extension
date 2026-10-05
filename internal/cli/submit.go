@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/google/go-github/v92/github"
@@ -57,7 +58,7 @@ type submitResult struct {
 func runSubmit(e *env, branches []string, o submitOpts) error {
 	if len(branches) == 0 {
 		var err error
-		if branches, err = e.currentBranches(); err != nil {
+		if branches, err = e.currentBranches(o); err != nil {
 			return err
 		}
 	}
@@ -66,7 +67,7 @@ func runSubmit(e *env, branches []string, o submitOpts) error {
 			return usagef("--message for %s, which is not submitted", b)
 		}
 	}
-	trunk, err := e.trunk(branches[0], o.base)
+	trunk, err := e.trunk(branches[0], o)
 	if err != nil {
 		return err
 	}
@@ -125,10 +126,10 @@ func (e *env) linkSubmitted(prs []submittedPR, dryRun bool) (*linkResult, error)
 	return &link, err
 }
 
-// currentBranches is what a bare submit means: the current branch's stack;
-// or, for a branch without a pull request, the open stack whose top branch
-// it was cut from, plus the branch as a new layer; or the branch alone.
-func (e *env) currentBranches() ([]string, error) {
+// currentBranches is what a bare submit means: the current branch's stack
+// when it is in one; otherwise the local branches cut one from another
+// between the trunk and the current branch, bottom first, then the branch.
+func (e *env) currentBranches(o submitOpts) ([]string, error) {
 	current, err := e.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
@@ -137,55 +138,87 @@ func (e *env) currentBranches() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p != nil {
-		if p.Stack == nil || p.Stack.Number == nil {
-			return []string{current}, nil
-		}
+	if p != nil && p.Stack != nil && p.Stack.Number != nil {
 		s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *p.Stack.Number)
 		if err != nil {
 			return nil, stackapi.Classify(err)
 		}
 		return openBranches(s), nil
 	}
-	below, err := e.stackBelow(current)
-	if err != nil || below == nil {
-		return []string{current}, err
+	below, err := e.branchesBelow(current, o)
+	if err != nil {
+		return nil, err
 	}
 	return append(below, current), nil
 }
 
-// stackBelow returns the open branches of the stack whose top branch is in
-// branch's history, or nil when branch sits on no stack.
-func (e *env) stackBelow(branch string) ([]string, error) {
-	head, err := e.Git.BranchSHA(branch)
-	if err != nil || head == "" {
-		return nil, err
-	}
-	stacks, err := e.listStacks(0)
+// branchesBelow is the local branches in current's history and not yet in
+// the trunk, bottom first. They must form one line: a fork is an error.
+func (e *env) branchesBelow(current string, o submitOpts) ([]string, error) {
+	trunk, err := e.trunkName(o)
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range stacks {
-		if !m.Open {
-			continue
-		}
-		s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, m.Number)
-		if err != nil {
-			return nil, stackapi.Classify(err)
-		}
-		open := openBranches(s)
-		if len(open) == 0 {
-			continue
-		}
-		top, err := e.Git.BranchSHA(open[len(open)-1])
-		if err != nil {
-			return nil, err
-		}
-		if top != "" && e.Git.IsAncestor(top, head) {
-			return open, nil
+	trunkSHA, err := e.Git.RefSHA("refs/remotes/" + o.remote + "/" + trunk)
+	if err != nil {
+		return nil, err
+	}
+	locals, err := e.Git.LocalBranches()
+	if err != nil {
+		return nil, err
+	}
+	head := locals[current]
+	var below []string
+	for name, sha := range locals {
+		inTrunk := trunkSHA != "" && e.Git.IsAncestor(sha, trunkSHA)
+		if name != current && name != trunk && !inTrunk && e.Git.IsAncestor(sha, head) {
+			below = append(below, name)
 		}
 	}
-	return nil, nil
+	if err := e.refuseMerged(below, o.remote, trunk); err != nil {
+		return nil, err
+	}
+	return e.orderChain(below, locals)
+}
+
+// refuseMerged stops on a branch whose pull request already merged: the local
+// trunk is stale, and submitting would open a second pull request for it.
+func (e *env) refuseMerged(branches []string, remote, trunk string) error {
+	for _, b := range branches {
+		prs, _, err := e.PRs.List(e.ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "closed", Head: e.owner + ":" + b})
+		if err != nil {
+			return stackapi.Classify(err)
+		}
+		for _, p := range prs {
+			if p.MergedAt != nil {
+				return fmt.Errorf("%w: %s already merged as #%d; run git fetch %s and rebase onto %s/%s", stackapi.ErrConflict, b, p.GetNumber(), remote, remote, trunk)
+			}
+		}
+	}
+	return nil
+}
+
+// orderChain sorts branches so each one's tip is in the next one's history.
+func (e *env) orderChain(branches []string, tips map[string]string) ([]string, error) {
+	sort.Strings(branches) // stable error messages
+	sort.SliceStable(branches, func(i, j int) bool {
+		return tips[branches[i]] != tips[branches[j]] && e.Git.IsAncestor(tips[branches[i]], tips[branches[j]])
+	})
+	for i := 1; i < len(branches); i++ {
+		a, b := branches[i-1], branches[i]
+		if tips[a] == tips[b] || !e.Git.IsAncestor(tips[a], tips[b]) {
+			return nil, fmt.Errorf("%w: branches %s and %s are not one on top of the other; pass the branches to submit", stackapi.ErrValidation, a, b)
+		}
+	}
+	return branches, nil
+}
+
+// trunkName is --base, or the remote's default branch.
+func (e *env) trunkName(o submitOpts) (string, error) {
+	if o.base != "" {
+		return o.base, nil
+	}
+	return e.Git.DefaultBranch(o.remote)
 }
 
 func openBranches(s *github.PullRequestStackDetails) []string {
@@ -221,20 +254,20 @@ func (e *env) changedBranches(remote string, branches []string) ([]string, error
 	return out, nil
 }
 
-// trunk is the branch the bottom pull request targets: --base, or the base
-// of the bottom branch's open pull request.
-func (e *env) trunk(bottom, flagBase string) (string, error) {
-	if flagBase != "" {
-		return flagBase, nil
+// trunk is the branch the bottom pull request targets: --base, the base of
+// the bottom branch's open pull request, or the remote's default branch.
+func (e *env) trunk(bottom string, o submitOpts) (string, error) {
+	if o.base != "" {
+		return o.base, nil
 	}
 	p, err := e.openPRForHead(bottom)
 	if err != nil {
 		return "", err
 	}
-	if p == nil {
-		return "", usagef("%s has no pull request yet: pass --base", bottom)
+	if p != nil {
+		return p.GetBase().GetRef(), nil
 	}
-	return p.GetBase().GetRef(), nil
+	return e.trunkName(o)
 }
 
 func (e *env) submitOne(branch, base, upstream string, o submitOpts) (submittedPR, error) {

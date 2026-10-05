@@ -188,7 +188,8 @@ func (f *fakeGitHub) List(_ context.Context, owner, _ string, o *github.PullRequ
 	for n, pr := range f.prs {
 		headOK := o.Head == "" || o.Head == owner+":"+pr.GetHead().GetRef()
 		baseOK := o.Base == "" || o.Base == pr.GetBase().GetRef()
-		if headOK && baseOK && pr.GetState() == "open" {
+		stateOK := pr.GetState() == o.State || o.State == ""
+		if headOK && baseOK && stateOK {
 			nums = append(nums, n)
 		}
 	}
@@ -386,4 +387,24 @@ func (f *fakeGitHub) answer() (*github.PullRequestMergeAsyncResult, *github.Resp
 		raw = []byte(f.acceptRaw)
 	}
 	return nil, nil, &github.AcceptedError{Raw: raw}
+}
+
+func (g *fakeGit) LocalBranches() (map[string]string, error) {
+	if err := g.failOp["LocalBranches"]; err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for ref, sha := range g.refs {
+		if name, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+			out[name] = sha
+		}
+	}
+	return out, nil
+}
+
+func (g *fakeGit) DefaultBranch(_ string) (string, error) {
+	if err := g.failOp["DefaultBranch"]; err != nil {
+		return "", err
+	}
+	return "main", nil
 }

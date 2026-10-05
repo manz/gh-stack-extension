@@ -90,3 +90,27 @@ func (r Repo) FirstCommitMessage(upstream, branch string) (subject, body string,
 	subject, body, _ = strings.Cut(msg, "\n")
 	return subject, strings.TrimSpace(body), nil
 }
+
+// LocalBranches maps every local branch to its commit.
+func (r Repo) LocalBranches() (map[string]string, error) {
+	out, err := r.git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	branches := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if name, sha, ok := strings.Cut(line, " "); ok {
+			branches[name] = sha
+		}
+	}
+	return branches, nil
+}
+
+// DefaultBranch is the remote's default branch, from refs/remotes/REMOTE/HEAD.
+func (r Repo) DefaultBranch(remote string) (string, error) {
+	ref, err := r.git("symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(ref, remote+"/"), nil
+}
