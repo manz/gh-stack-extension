@@ -3,6 +3,7 @@ package gitx
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -21,12 +22,19 @@ const forEachRef = "for-each-ref"
 var gitPath = sync.OnceValues(func() (string, error) { return safeexec.LookPath("git") })
 
 func (r Repo) git(args ...string) (string, error) {
+	return r.gitEnv(nil, args...)
+}
+
+func (r Repo) gitEnv(env []string, args ...string) (string, error) {
 	path, err := gitPath()
 	if err != nil {
 		return "", fmt.Errorf("git not found: %w", err)
 	}
 	cmd := exec.Command(path, args...)
 	cmd.Dir = r.Dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if err != nil {
@@ -127,4 +135,39 @@ func (r Repo) DefaultBranch(remote string) (string, error) {
 		return "", err
 	}
 	return strings.TrimPrefix(ref, remote+"/"), nil
+}
+
+// GitPath is the absolute path of name inside the git directory.
+func (r Repo) GitPath(name string) (string, error) {
+	return r.git("rev-parse", "--path-format=absolute", "--git-path", name)
+}
+
+// RebaseInProgress reports a rebase stopped on a conflict.
+func (r Repo) RebaseInProgress() bool {
+	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
+		if p, err := r.GitPath(dir); err == nil {
+			if _, err := os.Stat(p); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RebaseContinue resumes a stopped rebase with the commit messages it had.
+func (r Repo) RebaseContinue() error {
+	_, err := r.gitEnv([]string{"GIT_EDITOR=true"}, "rebase", "--continue")
+	return err
+}
+
+// RebaseAbort abandons a stopped rebase.
+func (r Repo) RebaseAbort() error {
+	_, err := r.git("rebase", "--abort")
+	return err
+}
+
+// SetBranch points branch at sha; the branch must not be checked out.
+func (r Repo) SetBranch(branch, sha string) error {
+	_, err := r.git("update-ref", "refs/heads/"+branch, sha)
+	return err
 }

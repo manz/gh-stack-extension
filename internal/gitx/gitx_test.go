@@ -1,7 +1,9 @@
 package gitx
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -154,5 +156,76 @@ func TestLocalBranchesAndDefaultBranch(t *testing.T) {
 	}
 	if _, err := (Repo{Dir: t.TempDir()}).LocalBranches(); err == nil {
 		t.Fatal("expected an error outside a repository")
+	}
+}
+
+// conflicting makes a <- b where a fixed line b also changed; it returns
+// the old tip of a that b was built on.
+func conflicting(t *testing.T) (Repo, string) {
+	t.Helper()
+	r := newRepo(t)
+	write := func(content, msg string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(r.Dir, "f"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r.must(t, "add", "f")
+		r.must(t, "commit", "-q", "-m", msg)
+	}
+	r.must(t, "checkout", "-q", "-b", "a")
+	write("a\n", "a")
+	r.must(t, "checkout", "-q", "-b", "b")
+	write("b\n", "b")
+	base, _ := r.BranchSHA("a")
+	r.must(t, "checkout", "-q", "a")
+	write("fixed\n", "fix a")
+	return r, base
+}
+
+func TestRebaseConflictAndAbort(t *testing.T) {
+	r, base := conflicting(t)
+	if r.RebaseInProgress() {
+		t.Fatal("no rebase yet")
+	}
+	if err := r.RebaseOnto("a", base, "b"); err == nil || !r.RebaseInProgress() {
+		t.Fatalf("expected a conflict, err=%v", err)
+	}
+	if err := r.RebaseAbort(); err != nil || r.RebaseInProgress() {
+		t.Fatalf("abort: %v", err)
+	}
+	if err := r.RebaseContinue(); err == nil {
+		t.Fatal("continue without a rebase must fail")
+	}
+}
+
+func TestRebaseConflictResolvedAndContinued(t *testing.T) {
+	r, base := conflicting(t)
+	if err := r.RebaseOnto("a", base, "b"); err == nil {
+		t.Fatal("expected a conflict")
+	}
+	if err := os.WriteFile(filepath.Join(r.Dir, "f"), []byte("resolved\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.must(t, "add", "f")
+	if err := r.RebaseContinue(); err != nil || r.RebaseInProgress() {
+		t.Fatalf("continue: %v", err)
+	}
+	fixed, _ := r.BranchSHA("a")
+	moved, _ := r.BranchSHA("b")
+	if !r.IsAncestor(fixed, moved) {
+		t.Fatal("b not on the fixed a")
+	}
+}
+
+func TestSetBranchAndGitPath(t *testing.T) {
+	r, base := conflicting(t)
+	if err := r.SetBranch("b", base); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.BranchSHA("b"); got != base {
+		t.Fatalf("b=%s want %s", got, base)
+	}
+	if p, err := r.GitPath("x.json"); err != nil || !filepath.IsAbs(p) {
+		t.Fatalf("path=%q err=%v", p, err)
 	}
 }
