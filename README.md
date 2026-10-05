@@ -24,6 +24,15 @@ local state to drift.
 gh extension install manz/gh-stack-extension
 ```
 
+### Agent skill
+
+[`skills/gh-stack-extension`](skills/gh-stack-extension/SKILL.md) teaches a
+coding agent the loop, the rules and the exit codes. For Claude Code:
+
+```sh
+mkdir -p ~/.claude/skills && cp -r skills/gh-stack-extension ~/.claude/skills/
+```
+
 ## The loop
 
 ```sh
