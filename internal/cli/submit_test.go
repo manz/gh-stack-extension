@@ -361,3 +361,35 @@ func TestSubmitRefusesABranchAlreadyMerged(t *testing.T) {
 		t.Fatalf("code=%d err=%q", code, h.err.String())
 	}
 }
+
+func TestSubmitRefusesAPullRequestWithoutADescription(t *testing.T) {
+	h := over("b4")
+	h.git.emptyBody = true
+	if code := h.run("submit"); code != ExitUsage || !strings.Contains(h.err.String(), "b4 would open a pull request without a description") {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+	if len(h.git.pushes) != 0 {
+		t.Fatalf("pushed before refusing: %v", h.git.pushes)
+	}
+	msg := filepath.Join(t.TempDir(), "m")
+	if err := os.WriteFile(msg, []byte("Title only\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("submit", "--message", "b4="+msg); code != ExitUsage {
+		t.Fatalf("a title alone is not a description: code=%d", code)
+	}
+	if err := os.WriteFile(msg, []byte("Title\n\nWhat changed.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("submit", "--message", "b4="+msg); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+}
+
+func TestSubmitDoesNotNeedADescriptionForExistingPullRequests(t *testing.T) {
+	h := synced()
+	h.git.emptyBody = true
+	if code := h.run("submit"); code != ExitOK {
+		t.Fatalf("code=%d err=%q", code, h.err.String())
+	}
+}

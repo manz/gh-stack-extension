@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	register("submit", command{usage: "push BRANCH... (bottom first, default: the current stack), open or fix their pull requests, link the stack", setup: submitFlags})
+	register("submit", command{usage: "push BRANCH... (bottom first; default: the branches between the trunk and HEAD), open or fix their pull requests, link the stack", setup: submitFlags})
 }
 
 type submitOpts struct {
@@ -26,7 +26,7 @@ type submitOpts struct {
 
 func submitFlags(fs *flag.FlagSet) func(*env, []string) error {
 	o := submitOpts{messages: map[string]string{}}
-	fs.StringVar(&o.base, "base", "", "branch the bottom pull request targets (default: its current base)")
+	fs.StringVar(&o.base, "base", "", "branch the bottom pull request targets (default: its current base, else the remote's default branch)")
 	fs.StringVar(&o.remote, "remote", "origin", "git remote to push to")
 	fs.BoolVar(&o.draft, "draft", false, "open new pull requests as drafts")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would change, change nothing")
@@ -71,11 +71,15 @@ func runSubmit(e *env, branches []string, o submitOpts) error {
 	if err != nil {
 		return err
 	}
+	plan, err := e.planSubmit(branches, trunk, o)
+	if err != nil {
+		return err
+	}
 	res := submitResult{}
 	if res.Pushed, err = e.pushChanged(branches, o); err != nil {
 		return err
 	}
-	if res.PullRequests, err = e.submitAll(branches, trunk, o); err != nil {
+	if res.PullRequests, err = e.applySubmit(plan, o); err != nil {
 		return err
 	}
 	if res.Stack, err = e.linkSubmitted(res.PullRequests, o.dryRun); err != nil {
@@ -91,23 +95,6 @@ func (e *env) pushChanged(branches []string, o submitOpts) ([]string, error) {
 		return toPush, err
 	}
 	return toPush, e.Git.Push(o.remote, toPush)
-}
-
-// submitAll opens or fixes each branch's pull request, each based on the one below.
-func (e *env) submitAll(branches []string, trunk string, o submitOpts) ([]submittedPR, error) {
-	var out []submittedPR
-	for i, b := range branches {
-		base, upstream := trunk, o.remote+"/"+trunk
-		if i > 0 {
-			base, upstream = branches[i-1], branches[i-1]
-		}
-		sp, err := e.submitOne(b, base, upstream, o)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sp)
-	}
-	return out, nil
 }
 
 // linkSubmitted links two or more submitted pull requests into one stack.
@@ -270,15 +257,59 @@ func (e *env) trunk(bottom string, o submitOpts) (string, error) {
 	return e.trunkName(o)
 }
 
-func (e *env) submitOne(branch, base, upstream string, o submitOpts) (submittedPR, error) {
-	sp := submittedPR{Branch: branch, Base: base}
-	existing, err := e.openPRForHead(branch)
-	if err != nil {
-		return sp, err
+// plannedPR is what submit will do for one branch, decided before pushing.
+type plannedPR struct {
+	branch, base string
+	existing     *github.PullRequest
+	title, body  string // for a new pull request
+}
+
+// planSubmit finds each branch's open pull request, or the title and body a
+// new one gets, each based on the branch below. A new pull request without
+// a body is refused before anything is pushed.
+func (e *env) planSubmit(branches []string, trunk string, o submitOpts) ([]plannedPR, error) {
+	var plan []plannedPR
+	for i, b := range branches {
+		p := plannedPR{branch: b, base: trunk}
+		upstream := o.remote + "/" + trunk
+		if i > 0 {
+			p.base, upstream = branches[i-1], branches[i-1]
+		}
+		var err error
+		if p.existing, err = e.openPRForHead(b); err != nil {
+			return nil, err
+		}
+		if p.existing == nil {
+			if p.title, p.body, err = e.message(b, upstream, o); err != nil {
+				return nil, err
+			}
+			if strings.TrimSpace(p.title) == "" || strings.TrimSpace(p.body) == "" {
+				return nil, usagef("%s would open a pull request without a description: give its first commit a body, or pass --message %s=FILE", b, b)
+			}
+		}
+		plan = append(plan, p)
 	}
-	if existing != nil {
-		sp.Number = existing.GetNumber()
-		if existing.GetBase().GetRef() == base {
+	return plan, nil
+}
+
+// applySubmit creates the new pull requests and retargets the misbased ones.
+func (e *env) applySubmit(plan []plannedPR, o submitOpts) ([]submittedPR, error) {
+	var out []submittedPR
+	for _, p := range plan {
+		sp, err := e.applyOne(p, o)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sp)
+	}
+	return out, nil
+}
+
+func (e *env) applyOne(p plannedPR, o submitOpts) (submittedPR, error) {
+	sp := submittedPR{Branch: p.branch, Base: p.base}
+	if p.existing != nil {
+		sp.Number = p.existing.GetNumber()
+		if p.existing.GetBase().GetRef() == p.base {
 			sp.Action = actionUnchanged
 			return sp, nil
 		}
@@ -286,24 +317,20 @@ func (e *env) submitOne(branch, base, upstream string, o submitOpts) (submittedP
 		if o.dryRun {
 			return sp, nil
 		}
-		_, _, err := e.PRs.Edit(e.ctx, e.owner, e.repo, sp.Number, &github.PullRequest{Base: &github.PullRequestBranch{Ref: github.Ptr(base)}})
+		_, _, err := e.PRs.Edit(e.ctx, e.owner, e.repo, sp.Number, &github.PullRequest{Base: &github.PullRequestBranch{Ref: github.Ptr(p.base)}})
 		return sp, stackapi.Classify(err)
-	}
-	title, body, err := e.message(branch, upstream, o)
-	if err != nil {
-		return sp, err
 	}
 	sp.Action = dry(actionCreated, o.dryRun)
 	if o.dryRun {
 		return sp, nil
 	}
-	p, _, err := e.PRs.Create(e.ctx, e.owner, e.repo, github.CreatePullRequest{
-		Title: github.Ptr(title), Body: github.Ptr(body), Head: branch, Base: base, Draft: github.Ptr(o.draft),
+	created, _, err := e.PRs.Create(e.ctx, e.owner, e.repo, github.CreatePullRequest{
+		Title: github.Ptr(p.title), Body: github.Ptr(p.body), Head: p.branch, Base: p.base, Draft: github.Ptr(o.draft),
 	})
 	if err != nil {
 		return sp, stackapi.Classify(err)
 	}
-	sp.Number = p.GetNumber()
+	sp.Number = created.GetNumber()
 	return sp, nil
 }
 

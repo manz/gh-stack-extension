@@ -210,6 +210,7 @@ type fakeGit struct {
 	restacks  []string
 	pushes    []string
 	checkouts []string
+	emptyBody bool // commits carry a subject only
 	failOp    map[string]error
 }
 
@@ -340,6 +341,9 @@ func (f *fakeGitHub) Edit(_ context.Context, _, _ string, n int, p *github.PullR
 func (g *fakeGit) FirstCommitMessage(upstream, branch string) (subject, body string, err error) {
 	if err := g.failOp["FirstCommitMessage"]; err != nil {
 		return "", "", err
+	}
+	if g.emptyBody {
+		return "Subject of " + branch, "", nil
 	}
 	return "Subject of " + branch, "Body of " + branch + " on " + upstream, nil
 }
