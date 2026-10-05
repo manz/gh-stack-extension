@@ -1,8 +1,17 @@
 # gh-stack-extension
 
+[![ci](https://github.com/manz/gh-stack-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/manz/gh-stack-extension/actions/workflows/ci.yml)
+[![release](https://github.com/manz/gh-stack-extension/actions/workflows/release.yml/badge.svg)](https://github.com/manz/gh-stack-extension/actions/workflows/release.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=manz_gh-stack-extension&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=manz_gh-stack-extension)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=manz_gh-stack-extension&metric=coverage)](https://sonarcloud.io/summary/new_code?id=manz_gh-stack-extension)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=manz_gh-stack-extension&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=manz_gh-stack-extension)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=manz_gh-stack-extension&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=manz_gh-stack-extension)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=manz_gh-stack-extension&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=manz_gh-stack-extension)
+[![Go](https://img.shields.io/github/go-mod/go-version/manz/gh-stack-extension)](go.mod)
+
 A `gh` extension for GitHub [stacked pull requests][stacks], built to be driven
 by scripts and agents: it never prompts, every command prints JSON with
-`--json`, reruns are safe (each pull request reports `created`, `updated` or
+`--json`, reruns are safe (each pull request reports `created`, `retargeted` or
 `unchanged`), anything that changes state takes `--dry-run`, and failures map
 to exit codes. The stack is always derived from git and GitHub; there is no
 local state to drift.

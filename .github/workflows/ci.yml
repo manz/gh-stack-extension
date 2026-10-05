@@ -7,9 +7,16 @@ on:
 jobs:
   check:
     runs-on: ubuntu-26.04
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # SonarCloud blames new code against history
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - run: make check
+      - name: SonarCloud scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v8.3.0
