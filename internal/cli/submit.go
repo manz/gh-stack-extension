@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -24,7 +25,7 @@ type submitOpts struct {
 	messages map[string]string // branch -> file holding "title\n\nbody"
 }
 
-func submitFlags(fs *flag.FlagSet) func(*env, []string) error {
+func submitFlags(fs *flag.FlagSet) func(context.Context, *env, []string) error {
 	o := submitOpts{messages: map[string]string{}}
 	fs.StringVar(&o.base, "base", "", "branch the bottom pull request targets (default: its current base, else the remote's default branch)")
 	fs.StringVar(&o.remote, "remote", "origin", "git remote to push to")
@@ -38,7 +39,7 @@ func submitFlags(fs *flag.FlagSet) func(*env, []string) error {
 		o.messages[branch] = file
 		return nil
 	})
-	return func(e *env, args []string) error { return runSubmit(e, args, o) }
+	return func(ctx context.Context, e *env, args []string) error { return runSubmit(ctx, e, args, o) }
 }
 
 // submittedPR is what submit did for one branch.
@@ -55,10 +56,10 @@ type submitResult struct {
 	Stack        *linkResult   `json:"stack,omitempty"`
 }
 
-func runSubmit(e *env, branches []string, o submitOpts) error {
+func runSubmit(ctx context.Context, e *env, branches []string, o submitOpts) error {
 	if len(branches) == 0 {
 		var err error
-		if branches, err = e.currentBranches(o); err != nil {
+		if branches, err = e.currentBranches(ctx, o); err != nil {
 			return err
 		}
 	}
@@ -67,11 +68,11 @@ func runSubmit(e *env, branches []string, o submitOpts) error {
 			return usagef("--message for %s, which is not submitted", b)
 		}
 	}
-	trunk, err := e.trunk(branches[0], o)
+	trunk, err := e.trunk(ctx, branches[0], o)
 	if err != nil {
 		return err
 	}
-	plan, err := e.planSubmit(branches, trunk, o)
+	plan, err := e.planSubmit(ctx, branches, trunk, o)
 	if err != nil {
 		return err
 	}
@@ -79,10 +80,10 @@ func runSubmit(e *env, branches []string, o submitOpts) error {
 	if res.Pushed, err = e.pushChanged(branches, o); err != nil {
 		return err
 	}
-	if res.PullRequests, err = e.applySubmit(plan, o); err != nil {
+	if res.PullRequests, err = e.applySubmit(ctx, plan, o); err != nil {
 		return err
 	}
-	if res.Stack, err = e.linkSubmitted(res.PullRequests, o.dryRun); err != nil {
+	if res.Stack, err = e.linkSubmitted(ctx, res.PullRequests, o.dryRun); err != nil {
 		return err
 	}
 	return e.emit(res, func(w io.Writer) { printSubmit(w, res, o) })
@@ -98,7 +99,7 @@ func (e *env) pushChanged(branches []string, o submitOpts) ([]string, error) {
 }
 
 // linkSubmitted links two or more submitted pull requests into one stack.
-func (e *env) linkSubmitted(prs []submittedPR, dryRun bool) (*linkResult, error) {
+func (e *env) linkSubmitted(ctx context.Context, prs []submittedPR, dryRun bool) (*linkResult, error) {
 	nums := make([]int, len(prs))
 	for i, p := range prs {
 		nums[i] = p.Number
@@ -109,30 +110,30 @@ func (e *env) linkSubmitted(prs []submittedPR, dryRun bool) (*linkResult, error)
 	case contains0(nums):
 		return &linkResult{Action: "would-link", PullRequests: nums}, nil
 	}
-	link, err := e.link(nums, dryRun)
+	link, err := e.link(ctx, nums, dryRun)
 	return &link, err
 }
 
 // currentBranches is what a bare submit means: the current branch's stack
 // when it is in one; otherwise the local branches cut one from another
 // between the trunk and the current branch, bottom first, then the branch.
-func (e *env) currentBranches(o submitOpts) ([]string, error) {
+func (e *env) currentBranches(ctx context.Context, o submitOpts) ([]string, error) {
 	current, err := e.Git.CurrentBranch()
 	if err != nil {
 		return nil, err
 	}
-	p, err := e.openPRForHead(current)
+	p, err := e.openPRForHead(ctx, current)
 	if err != nil {
 		return nil, err
 	}
 	if p != nil && p.Stack != nil && p.Stack.Number != nil {
-		s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *p.Stack.Number)
+		s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, *p.Stack.Number)
 		if err != nil {
 			return nil, stackapi.Classify(err)
 		}
 		return openBranches(s), nil
 	}
-	below, err := e.branchesBelow(current, o)
+	below, err := e.branchesBelow(ctx, current, o)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +142,7 @@ func (e *env) currentBranches(o submitOpts) ([]string, error) {
 
 // branchesBelow is the local branches in current's history and not yet in
 // the trunk, bottom first. They must form one line: a fork is an error.
-func (e *env) branchesBelow(current string, o submitOpts) ([]string, error) {
+func (e *env) branchesBelow(ctx context.Context, current string, o submitOpts) ([]string, error) {
 	trunk, err := e.trunkName(o)
 	if err != nil {
 		return nil, err
@@ -162,7 +163,7 @@ func (e *env) branchesBelow(current string, o submitOpts) ([]string, error) {
 			below = append(below, name)
 		}
 	}
-	if err := e.refuseMerged(below, o.remote, trunk); err != nil {
+	if err := e.refuseMerged(ctx, below, o.remote, trunk); err != nil {
 		return nil, err
 	}
 	return e.orderChain(below, locals)
@@ -170,9 +171,9 @@ func (e *env) branchesBelow(current string, o submitOpts) ([]string, error) {
 
 // refuseMerged stops on a branch whose pull request already merged: the local
 // trunk is stale, and submitting would open a second pull request for it.
-func (e *env) refuseMerged(branches []string, remote, trunk string) error {
+func (e *env) refuseMerged(ctx context.Context, branches []string, remote, trunk string) error {
 	for _, b := range branches {
-		prs, _, err := e.PRs.List(e.ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "closed", Head: e.owner + ":" + b})
+		prs, _, err := e.PRs.List(ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "closed", Head: e.owner + ":" + b})
 		if err != nil {
 			return stackapi.Classify(err)
 		}
@@ -243,11 +244,11 @@ func (e *env) changedBranches(remote string, branches []string) ([]string, error
 
 // trunk is the branch the bottom pull request targets: --base, the base of
 // the bottom branch's open pull request, or the remote's default branch.
-func (e *env) trunk(bottom string, o submitOpts) (string, error) {
+func (e *env) trunk(ctx context.Context, bottom string, o submitOpts) (string, error) {
 	if o.base != "" {
 		return o.base, nil
 	}
-	p, err := e.openPRForHead(bottom)
+	p, err := e.openPRForHead(ctx, bottom)
 	if err != nil {
 		return "", err
 	}
@@ -267,7 +268,7 @@ type plannedPR struct {
 // planSubmit finds each branch's open pull request, or the title and body a
 // new one gets, each based on the branch below. A new pull request without
 // a body is refused before anything is pushed.
-func (e *env) planSubmit(branches []string, trunk string, o submitOpts) ([]plannedPR, error) {
+func (e *env) planSubmit(ctx context.Context, branches []string, trunk string, o submitOpts) ([]plannedPR, error) {
 	var plan []plannedPR
 	for i, b := range branches {
 		p := plannedPR{branch: b, base: trunk}
@@ -276,7 +277,7 @@ func (e *env) planSubmit(branches []string, trunk string, o submitOpts) ([]plann
 			p.base, upstream = branches[i-1], branches[i-1]
 		}
 		var err error
-		if p.existing, err = e.openPRForHead(b); err != nil {
+		if p.existing, err = e.openPRForHead(ctx, b); err != nil {
 			return nil, err
 		}
 		if p.existing == nil {
@@ -293,10 +294,10 @@ func (e *env) planSubmit(branches []string, trunk string, o submitOpts) ([]plann
 }
 
 // applySubmit creates the new pull requests and retargets the misbased ones.
-func (e *env) applySubmit(plan []plannedPR, o submitOpts) ([]submittedPR, error) {
+func (e *env) applySubmit(ctx context.Context, plan []plannedPR, o submitOpts) ([]submittedPR, error) {
 	var out []submittedPR
 	for _, p := range plan {
-		sp, err := e.applyOne(p, o)
+		sp, err := e.applyOne(ctx, p, o)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +306,7 @@ func (e *env) applySubmit(plan []plannedPR, o submitOpts) ([]submittedPR, error)
 	return out, nil
 }
 
-func (e *env) applyOne(p plannedPR, o submitOpts) (submittedPR, error) {
+func (e *env) applyOne(ctx context.Context, p plannedPR, o submitOpts) (submittedPR, error) {
 	sp := submittedPR{Branch: p.branch, Base: p.base}
 	if p.existing != nil {
 		sp.Number = p.existing.GetNumber()
@@ -317,14 +318,14 @@ func (e *env) applyOne(p plannedPR, o submitOpts) (submittedPR, error) {
 		if o.dryRun {
 			return sp, nil
 		}
-		_, _, err := e.PRs.Edit(e.ctx, e.owner, e.repo, sp.Number, &github.PullRequest{Base: &github.PullRequestBranch{Ref: github.Ptr(p.base)}})
+		_, _, err := e.PRs.Edit(ctx, e.owner, e.repo, sp.Number, &github.PullRequest{Base: &github.PullRequestBranch{Ref: github.Ptr(p.base)}})
 		return sp, stackapi.Classify(err)
 	}
 	sp.Action = dry(actionCreated, o.dryRun)
 	if o.dryRun {
 		return sp, nil
 	}
-	created, _, err := e.PRs.Create(e.ctx, e.owner, e.repo, github.CreatePullRequest{
+	created, _, err := e.PRs.Create(ctx, e.owner, e.repo, github.CreatePullRequest{
 		Title: github.Ptr(p.title), Body: github.Ptr(p.body), Head: p.branch, Base: p.base, Draft: github.Ptr(o.draft),
 	})
 	if err != nil {

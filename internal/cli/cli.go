@@ -57,7 +57,6 @@ type Deps struct {
 // env is what a command runs with once flags are parsed.
 type env struct {
 	Deps
-	ctx   context.Context
 	owner string
 	repo  string
 	json  bool
@@ -69,7 +68,7 @@ type env struct {
 // it once the flags are parsed.
 type command struct {
 	usage string
-	setup func(fs *flag.FlagSet) func(e *env, args []string) error
+	setup func(fs *flag.FlagSet) func(ctx context.Context, e *env, args []string) error
 }
 
 var commands = map[string]command{}
@@ -77,8 +76,8 @@ var commands = map[string]command{}
 func register(name string, c command) { commands[name] = c }
 
 // noFlags adapts a command without flags of its own.
-func noFlags(run func(e *env, args []string) error) func(*flag.FlagSet) func(*env, []string) error {
-	return func(*flag.FlagSet) func(*env, []string) error { return run }
+func noFlags(run func(ctx context.Context, e *env, args []string) error) func(*flag.FlagSet) func(context.Context, *env, []string) error {
+	return func(*flag.FlagSet) func(context.Context, *env, []string) error { return run }
 }
 
 // usageError is a wrong invocation; it exits with ExitUsage.
@@ -122,8 +121,8 @@ func Run(ctx context.Context, args []string, d Deps) int {
 		fmt.Fprintln(d.Err, err)
 		return ExitError
 	}
-	e := &env{Deps: d, ctx: ctx, owner: owner, repo: name, json: *asJSON, repoGiven: *repoFlag != ""}
-	if err := run(e, positional); err != nil {
+	e := &env{Deps: d, owner: owner, repo: name, json: *asJSON, repoGiven: *repoFlag != ""}
+	if err := run(ctx, e, positional); err != nil {
 		fmt.Fprintln(d.Err, err)
 		return exitCode(err)
 	}

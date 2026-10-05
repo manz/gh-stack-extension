@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,7 +28,7 @@ type mergeOpts struct {
 	dryRun   bool
 }
 
-func mergeFlags(fs *flag.FlagSet) func(*env, []string) error {
+func mergeFlags(fs *flag.FlagSet) func(context.Context, *env, []string) error {
 	var o mergeOpts
 	fs.StringVar(&o.method, "method", "", "merge, squash or rebase (default: the repository's)")
 	fs.BoolVar(&o.queue, "queue", false, "add to the merge queue")
@@ -36,7 +37,7 @@ func mergeFlags(fs *flag.FlagSet) func(*env, []string) error {
 	fs.DurationVar(&o.interval, "interval", 5*time.Second, "poll interval with --wait")
 	fs.DurationVar(&o.timeout, "timeout", 15*time.Minute, "give up waiting after this long")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print what would merge, merge nothing")
-	return func(e *env, args []string) error { return runMerge(e, args, o) }
+	return func(ctx context.Context, e *env, args []string) error { return runMerge(ctx, e, args, o) }
 }
 
 // Async merge statuses.
@@ -56,12 +57,12 @@ type mergeResult struct {
 	PullRequests []int  `json:"pull_requests"` // what lands, bottom first
 }
 
-func runMerge(e *env, args []string, o mergeOpts) error {
+func runMerge(ctx context.Context, e *env, args []string, o mergeOpts) error {
 	req, err := o.request()
 	if err != nil {
 		return err
 	}
-	res, err := e.mergePlan(args)
+	res, err := e.mergePlan(ctx, args)
 	if err != nil {
 		return err
 	}
@@ -71,13 +72,13 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 			fmt.Fprintf(w, "would merge %s %s\n", res.Repository, joinNumbers(res.PullRequests))
 		})
 	}
-	r, err := accepted(e.PRs.MergeAsync(e.ctx, e.owner, e.repo, res.PullRequest, req))
+	r, err := accepted(e.PRs.MergeAsync(ctx, e.owner, e.repo, res.PullRequest, req))
 	if err != nil {
 		return stackapi.Classify(err)
 	}
 	res.fill(r)
 	if o.wait {
-		if err := e.waitForMerge(&res, o); err != nil {
+		if err := e.waitForMerge(ctx, &res, o); err != nil {
 			return err
 		}
 	}
@@ -91,8 +92,8 @@ func runMerge(e *env, args []string, o mergeOpts) error {
 }
 
 // mergePlan is the pull request to merge and every open layer that lands with it.
-func (e *env) mergePlan(args []string) (mergeResult, error) {
-	pr, err := e.mergeTarget(args)
+func (e *env) mergePlan(ctx context.Context, args []string) (mergeResult, error) {
+	pr, err := e.mergeTarget(ctx, args)
 	if err != nil {
 		return mergeResult{}, err
 	}
@@ -100,7 +101,7 @@ func (e *env) mergePlan(args []string) (mergeResult, error) {
 	if pr.Stack == nil || pr.Stack.Number == nil {
 		return res, nil
 	}
-	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, *pr.Stack.Number)
+	s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, *pr.Stack.Number)
 	if err != nil {
 		return res, stackapi.Classify(err)
 	}
@@ -109,14 +110,14 @@ func (e *env) mergePlan(args []string) (mergeResult, error) {
 }
 
 // waitForMerge polls until the merge request leaves pending or times out.
-func (e *env) waitForMerge(res *mergeResult, o mergeOpts) error {
+func (e *env) waitForMerge(ctx context.Context, res *mergeResult, o mergeOpts) error {
 	deadline := time.Now().Add(o.timeout)
 	for res.Status == statusPending {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("still pending after %s: merge request %s", o.timeout, res.UUID)
 		}
 		e.sleep(o.interval)
-		r, err := accepted(e.PRs.GetMergeAsyncResult(e.ctx, e.owner, e.repo, res.PullRequest, res.UUID))
+		r, err := accepted(e.PRs.GetMergeAsyncResult(ctx, e.owner, e.repo, res.PullRequest, res.UUID))
 		if err != nil {
 			return stackapi.Classify(err)
 		}
@@ -188,21 +189,21 @@ func (e *env) sleep(d time.Duration) {
 }
 
 // mergeTarget is the pull request named by number, or the current branch's.
-func (e *env) mergeTarget(args []string) (*github.PullRequest, error) {
+func (e *env) mergeTarget(ctx context.Context, args []string) (*github.PullRequest, error) {
 	switch len(args) {
 	case 0:
 		branch, err := e.Git.CurrentBranch()
 		if err != nil {
 			return nil, err
 		}
-		p, err := e.openPRForHead(branch)
+		p, err := e.openPRForHead(ctx, branch)
 		if err != nil {
 			return nil, err
 		}
 		if p == nil {
 			return nil, fmt.Errorf("%w: no open pull request for branch %s", stackapi.ErrNotFound, branch)
 		}
-		p, _, err = e.PRs.Get(e.ctx, e.owner, e.repo, p.GetNumber())
+		p, _, err = e.PRs.Get(ctx, e.owner, e.repo, p.GetNumber())
 		return p, stackapi.Classify(err)
 	case 1:
 		n, err := strconv.Atoi(args[0])
@@ -212,7 +213,7 @@ func (e *env) mergeTarget(args []string) (*github.PullRequest, error) {
 		if !e.repoGiven {
 			return nil, usagef("merge %d needs --repo OWNER/REPO: a pull request number means nothing without its repository", n)
 		}
-		p, _, err := e.PRs.Get(e.ctx, e.owner, e.repo, n)
+		p, _, err := e.PRs.Get(ctx, e.owner, e.repo, n)
 		return p, stackapi.Classify(err)
 	}
 	return nil, usagef("merge takes at most one pull request")

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -12,19 +13,19 @@ import (
 
 func init() {
 	register("list", command{usage: "list the repository's stacks", setup: noFlags(runList)})
-	register("view", command{usage: "show a stack: STACK, --pr N, or the current branch's", setup: func(fs *flag.FlagSet) func(*env, []string) error {
+	register("view", command{usage: "show a stack: STACK, --pr N, or the current branch's", setup: func(fs *flag.FlagSet) func(context.Context, *env, []string) error {
 		pr := fs.Int("pr", 0, "the stack containing this pull request")
-		return func(e *env, args []string) error { return runView(e, args, *pr) }
+		return func(ctx context.Context, e *env, args []string) error { return runView(ctx, e, args, *pr) }
 	}})
 }
 
 const pageSize = 100
 
-func runList(e *env, args []string) error {
+func runList(ctx context.Context, e *env, args []string) error {
 	if len(args) != 0 {
 		return usagef("list takes no arguments")
 	}
-	stacks, err := e.listStacks(0)
+	stacks, err := e.listStacks(ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -36,11 +37,11 @@ func runList(e *env, args []string) error {
 }
 
 // listStacks reads every page of stacks, or only those containing pr.
-func (e *env) listStacks(pr int) ([]*github.PullRequestStackMinimal, error) {
+func (e *env) listStacks(ctx context.Context, pr int) ([]*github.PullRequestStackMinimal, error) {
 	opts := &github.PullRequestListStacksOptions{PullRequest: pr, ListOptions: github.ListOptions{PerPage: pageSize}}
 	var all []*github.PullRequestStackMinimal
 	for {
-		batch, resp, err := e.PRs.ListStacks(e.ctx, e.owner, e.repo, opts)
+		batch, resp, err := e.PRs.ListStacks(ctx, e.owner, e.repo, opts)
 		if err != nil {
 			return nil, stackapi.Classify(err)
 		}
@@ -52,12 +53,12 @@ func (e *env) listStacks(pr int) ([]*github.PullRequestStackMinimal, error) {
 	}
 }
 
-func runView(e *env, args []string, pr int) error {
-	number, err := e.stackNumber(args, pr)
+func runView(ctx context.Context, e *env, args []string, pr int) error {
+	number, err := e.stackNumber(ctx, args, pr)
 	if err != nil {
 		return err
 	}
-	s, _, err := e.PRs.GetStack(e.ctx, e.owner, e.repo, number)
+	s, _, err := e.PRs.GetStack(ctx, e.owner, e.repo, number)
 	if err != nil {
 		return stackapi.Classify(err)
 	}
@@ -66,7 +67,7 @@ func runView(e *env, args []string, pr int) error {
 
 // stackNumber resolves which stack a command means: an explicit number, the
 // stack holding --pr, or the stack holding the current branch's pull request.
-func (e *env) stackNumber(args []string, pr int) (int, error) {
+func (e *env) stackNumber(ctx context.Context, args []string, pr int) (int, error) {
 	switch {
 	case len(args) > 1:
 		return 0, usagef("expected at most one stack number")
@@ -80,11 +81,11 @@ func (e *env) stackNumber(args []string, pr int) (int, error) {
 		return n, nil
 	case pr == 0:
 		var err error
-		if pr, err = e.currentPRNumber(); err != nil {
+		if pr, err = e.currentPRNumber(ctx); err != nil {
 			return 0, err
 		}
 	}
-	p, _, err := e.PRs.Get(e.ctx, e.owner, e.repo, pr)
+	p, _, err := e.PRs.Get(ctx, e.owner, e.repo, pr)
 	if err != nil {
 		return 0, stackapi.Classify(err)
 	}
@@ -95,12 +96,12 @@ func (e *env) stackNumber(args []string, pr int) (int, error) {
 }
 
 // currentPRNumber is the open pull request whose head is the current branch.
-func (e *env) currentPRNumber() (int, error) {
+func (e *env) currentPRNumber(ctx context.Context) (int, error) {
 	branch, err := e.Git.CurrentBranch()
 	if err != nil {
 		return 0, err
 	}
-	p, err := e.openPRForHead(branch)
+	p, err := e.openPRForHead(ctx, branch)
 	if err != nil {
 		return 0, err
 	}
@@ -111,8 +112,8 @@ func (e *env) currentPRNumber() (int, error) {
 }
 
 // openPRForHead returns the open pull request whose head is branch, or nil.
-func (e *env) openPRForHead(branch string) (*github.PullRequest, error) {
-	prs, _, err := e.PRs.List(e.ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "open", Head: e.owner + ":" + branch})
+func (e *env) openPRForHead(ctx context.Context, branch string) (*github.PullRequest, error) {
+	prs, _, err := e.PRs.List(ctx, e.owner, e.repo, &github.PullRequestListOptions{State: "open", Head: e.owner + ":" + branch})
 	if err != nil {
 		return nil, stackapi.Classify(err)
 	}
